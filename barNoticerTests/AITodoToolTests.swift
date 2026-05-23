@@ -100,6 +100,23 @@ final class AITodoToolTests: XCTestCase {
     }
 
     @MainActor
+    func testApplyingCreateTodoUsesProposalIDAndReturnsCreatedReference() throws {
+        let container = try ModelContainer(
+            for: TodoItem.self, TodoGroup.self, DailySummary.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let executor = AIToolExecutor(modelContext: container.mainContext)
+        let id = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+
+        let result = try executor.apply(.createTodo(id: id, title: "Read paper", priority: .high))
+
+        let items = try container.mainContext.fetch(FetchDescriptor<TodoItem>())
+        XCTAssertEqual(items.first?.id, id)
+        XCTAssertEqual(result, .createdTodo(id: id, title: "Read paper"))
+        XCTAssertTrue(result.toolMessage.contains("[[todo:\(id.uuidString)]]"))
+    }
+
+    @MainActor
     func testAssistantKeepsProposalsPendingWhenConfirmationIsEnabled() throws {
         let container = try ModelContainer(
             for: TodoItem.self, TodoGroup.self, DailySummary.self,

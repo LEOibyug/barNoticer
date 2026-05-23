@@ -6,6 +6,11 @@ final class AISettingsTests: XCTestCase {
         XCTAssertNotEqual(SidebarSelection.aiSettings, SidebarSelection.islandSettings)
     }
 
+    func testSidebarHasIndependentAppSettingsSelection() {
+        XCTAssertNotEqual(SidebarSelection.appSettings, SidebarSelection.islandSettings)
+        XCTAssertNotEqual(SidebarSelection.appSettings, SidebarSelection.aiSettings)
+    }
+
     func testAISettingsDraftPersistsChangesImmediately() {
         let suiteName = "AISettingsDraftTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

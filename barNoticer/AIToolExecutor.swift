@@ -88,10 +88,13 @@ final class AIToolExecutor {
         }
     }
 
-    func apply(_ proposal: AIActionProposal) throws {
+    @discardableResult
+    func apply(_ proposal: AIActionProposal) throws -> AIActionApplicationResult {
         switch proposal {
-        case let .createTodo(_, title, priority, groupID, deadlineAt):
-            modelContext.insert(TodoItem(title: title, priority: priority, groupID: groupID, deadlineAt: deadlineAt))
+        case let .createTodo(id, title, priority, groupID, deadlineAt):
+            modelContext.insert(TodoItem(id: id, title: title, priority: priority, groupID: groupID, deadlineAt: deadlineAt))
+            try modelContext.save()
+            return .createdTodo(id: id, title: title)
         case let .updateTodo(id, title, priority, groupID, deadlineAt, clearsDeadline):
             let item = try fetchTodo(id: id)
             if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -109,21 +112,33 @@ final class AIToolExecutor {
             if clearsDeadline {
                 item.updateDeadline(nil)
             }
+            try modelContext.save()
+            return .updatedTodo(id: id)
         case let .completeTodo(id):
             try fetchTodo(id: id).updateCompletion(true)
+            try modelContext.save()
+            return .completedTodo(id: id)
         case let .deleteTodo(id):
             modelContext.delete(try fetchTodo(id: id))
-        case let .createGroup(_, name, colorHex):
-            modelContext.insert(TodoGroup(name: name, colorHex: colorHex, sortOrder: TodoGroupResolver.nextSortOrder(in: try fetchGroups())))
+            try modelContext.save()
+            return .deletedTodo(id: id)
+        case let .createGroup(id, name, colorHex):
+            modelContext.insert(TodoGroup(id: id, name: name, colorHex: colorHex, sortOrder: TodoGroupResolver.nextSortOrder(in: try fetchGroups())))
+            try modelContext.save()
+            return .createdGroup(id: id, name: name)
         case let .updateGroup(id, name, colorHex, sortOrder):
             try fetchGroup(id: id).update(name: name, colorHex: colorHex, sortOrder: sortOrder)
+            try modelContext.save()
+            return .updatedGroup(id: id)
         case let .deleteGroup(id):
             try deleteGroup(id: id)
+            try modelContext.save()
+            return .deletedGroup(id: id)
         case let .saveDailySummary(_, content):
             modelContext.insert(DailySummary(content: content))
+            try modelContext.save()
+            return .savedDailySummary
         }
-
-        try modelContext.save()
     }
 
     private func fetchTodos() throws -> [TodoItem] {
@@ -173,6 +188,38 @@ final class AIToolExecutor {
 enum AIToolHandlingResult: Equatable {
     case context(String)
     case proposal(AIActionProposal)
+}
+
+enum AIActionApplicationResult: Equatable {
+    case createdTodo(id: UUID, title: String)
+    case updatedTodo(id: UUID)
+    case completedTodo(id: UUID)
+    case deletedTodo(id: UUID)
+    case createdGroup(id: UUID, name: String)
+    case updatedGroup(id: UUID)
+    case deletedGroup(id: UUID)
+    case savedDailySummary
+
+    var toolMessage: String {
+        switch self {
+        case let .createdTodo(id, title):
+            return "操作已执行：新增事项 id=\(id.uuidString)，引用标记=[[todo:\(id.uuidString)]]，标题=\(title)。如果接下来要展示或提到这个新事项，必须使用这个引用标记。"
+        case let .updatedTodo(id):
+            return "操作已执行：修改事项 id=\(id.uuidString)，引用标记=[[todo:\(id.uuidString)]]。"
+        case let .completedTodo(id):
+            return "操作已执行：完成事项 id=\(id.uuidString)，引用标记=[[todo:\(id.uuidString)]]。"
+        case let .deletedTodo(id):
+            return "操作已执行：删除事项 id=\(id.uuidString)。"
+        case let .createdGroup(id, name):
+            return "操作已执行：新增分组 id=\(id.uuidString)，名称=\(name)。"
+        case let .updatedGroup(id):
+            return "操作已执行：修改分组 id=\(id.uuidString)。"
+        case let .deletedGroup(id):
+            return "操作已执行：删除分组 id=\(id.uuidString)。"
+        case .savedDailySummary:
+            return "操作已执行：保存当日总结。"
+        }
+    }
 }
 
 private struct ToolArguments {

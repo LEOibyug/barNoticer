@@ -136,4 +136,18 @@ final class IslandLayoutSettingsTests: XCTestCase {
     func testModeSwitchAnimationDurationIsDeliberatelyRelaxed() {
         XCTAssertGreaterThanOrEqual(IslandAnimationTimings.modeSwitchDuration, 0.58)
     }
+
+    func testWideModeShowsAllItemsForEachPriority() {
+        let items = (0..<10).map { index in
+            TodoItem(title: "High \(index)", priority: .high)
+        } + [
+            TodoItem(title: "Medium", priority: .medium),
+            TodoItem(title: "Low", priority: .low)
+        ]
+
+        let visible = IslandWideTodoPolicy.items(for: .high, from: items)
+
+        XCTAssertEqual(visible.count, 10)
+        XCTAssertEqual(visible.map(\.title), (0..<10).map { "High \($0)" })
+    }
 }

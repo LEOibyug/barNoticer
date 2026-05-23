@@ -96,7 +96,7 @@ enum AITodoReferencePart: Equatable, Identifiable {
 enum AITodoReferenceParser {
     static func parse(_ text: String) -> [AITodoReferencePart] {
         let text = AIPlainResponseSanitizer.sanitize(text)
-        let pattern = #"\[\[todo:([0-9a-fA-F-]{36})\]\]"#
+        let pattern = #"\[\[(?:todo:)?([0-9a-fA-F-]{36})\]\]"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else {
             return [.text(text)]
         }

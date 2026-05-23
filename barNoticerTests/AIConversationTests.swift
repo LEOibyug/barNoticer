@@ -74,6 +74,21 @@ final class AIConversationTests: XCTestCase {
         ])
     }
 
+    func testTodoReferenceParserAcceptsBareUUIDReferencesFromModelOutput() {
+        let first = UUID(uuidString: "DA13451E-ADC7-485D-97D1-DCC56615875D")!
+        let second = UUID(uuidString: "F64E0416-573E-4A83-B16F-0A4C005979C6")!
+
+        let parts = AITodoReferenceParser.parse("明天最重要的事是[[\(first.uuidString)]]，之后可以着手[[\(second.uuidString)]]。")
+
+        XCTAssertEqual(parts, [
+            .text("明天最重要的事是"),
+            .todo(first),
+            .text("，之后可以着手"),
+            .todo(second),
+            .text("。")
+        ])
+    }
+
     func testTodoReferenceParserKeepsTextAndMultipleReferencesFromLoggedReply() {
         let first = UUID(uuidString: "56272897-7575-4190-8424-F3599BD5FCA7")!
         let second = UUID(uuidString: "F64E0416-573E-4A83-B16F-0A4C005979C6")!

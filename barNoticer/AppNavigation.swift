@@ -5,6 +5,7 @@ enum SidebarSelection: Hashable {
     case group(UUID)
     case islandSettings
     case aiSettings
+    case appSettings
 }
 
 enum TodoFilter: String, CaseIterable, Identifiable {

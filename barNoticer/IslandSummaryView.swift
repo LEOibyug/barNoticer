@@ -307,7 +307,13 @@ struct IslandSummaryView: View {
     }
 
     private func wideItems(for priority: TodoPriority) -> [TodoItem] {
-        Array(activeItems.filter { $0.priority == priority }.prefix(7))
+        IslandWideTodoPolicy.items(for: priority, from: activeItems)
+    }
+}
+
+enum IslandWideTodoPolicy {
+    static func items(for priority: TodoPriority, from items: [TodoItem]) -> [TodoItem] {
+        items.filter { $0.priority == priority }
     }
 }
 
@@ -339,17 +345,20 @@ private struct IslandPriorityColumn: View {
                     .foregroundStyle(.white.opacity(IslandSummaryStyle.subtleTextOpacity))
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .center)
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                        IslandTodoLine(item: item, groups: groups)
+                ScrollView(.vertical) {
+                    VStack(spacing: 0) {
+                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                            IslandTodoLine(item: item, groups: groups)
 
-                        if index < items.count - 1 {
-                            Divider()
-                                .overlay(.white.opacity(IslandSummaryStyle.dividerOpacity))
-                                .padding(.leading, 29)
+                            if index < items.count - 1 {
+                                Divider()
+                                    .overlay(.white.opacity(IslandSummaryStyle.dividerOpacity))
+                                    .padding(.leading, 29)
+                            }
                         }
                     }
                 }
+                .scrollIndicators(.never)
             }
         }
         .padding(.horizontal, 10)

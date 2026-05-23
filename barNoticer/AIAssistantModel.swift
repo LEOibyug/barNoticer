@@ -89,7 +89,7 @@ final class AIAssistantModel: ObservableObject {
 
         do {
             for proposal in proposals {
-                try applyConfirmed(proposal)
+                _ = try applyConfirmed(proposal)
             }
             self.proposals = []
             todoReferenceRefreshID = UUID()
@@ -173,12 +173,17 @@ final class AIAssistantModel: ObservableObject {
                     pendingProposals.append(proposal)
                     let toolMessage = settings.requiresActionConfirmation
                         ? "已创建待确认操作：\(proposal.summary)"
-                        : "操作已执行：\(proposal.summary)"
+                        : try executor.apply(proposal).toolMessage
                     messages.append(AIChatMessage(role: "tool", content: toolMessage, toolCallID: call.id))
                 }
             }
 
-            stageOrApply(pendingProposals, settings: settings)
+            if settings.requiresActionConfirmation {
+                stageOrApply(pendingProposals, settings: settings)
+            } else {
+                proposals = []
+                todoReferenceRefreshID = UUID()
+            }
             let final = try await client.send(messages: messages, settings: settings, apiKey: apiKey)
             let visibleFinal = AIVisibleResponse.sanitized(final.content)
             let visibleFirst = AIVisibleResponse.sanitized(first.content)
@@ -252,7 +257,7 @@ final class AIAssistantModel: ObservableObject {
     }
 
     private func applyConfirmed(_ proposal: AIActionProposal) throws {
-        try AIToolExecutor(modelContext: modelContext).apply(proposal)
+        _ = try AIToolExecutor(modelContext: modelContext).apply(proposal)
     }
 
     private func log(_ level: AppDebugLogStore.Level, _ message: String, metadata: [String: String] = [:]) {
