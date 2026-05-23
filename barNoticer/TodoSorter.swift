@@ -7,11 +7,34 @@ struct TodoPriorityGroup: Identifiable {
     var id: TodoPriority { priority }
 }
 
+struct TodoDisplayGroup: Identifiable {
+    let group: TodoGroup
+    let items: [TodoItem]
+
+    var id: UUID { group.id }
+}
+
 enum TodoSorter {
-    static func sorted(_ items: [TodoItem]) -> [TodoItem] {
+    static func sorted(_ items: [TodoItem], groups: [TodoGroup] = [], now: Date = Date()) -> [TodoItem] {
         items.sorted { lhs, rhs in
             if lhs.isCompleted != rhs.isCompleted {
                 return !lhs.isCompleted
+            }
+
+            let lhsGroup = TodoGroupResolver.group(for: lhs, groups: groups)
+            let rhsGroup = TodoGroupResolver.group(for: rhs, groups: groups)
+            if lhsGroup.sortOrder != rhsGroup.sortOrder {
+                return lhsGroup.sortOrder < rhsGroup.sortOrder
+            }
+
+            let lhsDeadlineRank = deadlineRank(lhs.deadlineAt, now: now)
+            let rhsDeadlineRank = deadlineRank(rhs.deadlineAt, now: now)
+            if lhsDeadlineRank != rhsDeadlineRank {
+                return lhsDeadlineRank < rhsDeadlineRank
+            }
+
+            if let lhsDeadline = lhs.deadlineAt, let rhsDeadline = rhs.deadlineAt, lhsDeadline != rhsDeadline {
+                return lhsDeadline < rhsDeadline
             }
 
             if lhs.priority.rank != rhs.priority.rank {
@@ -31,5 +54,23 @@ enum TodoSorter {
 
             return TodoPriorityGroup(priority: priority, items: priorityItems)
         }
+    }
+
+    static func displayGroups(items: [TodoItem], groups: [TodoGroup], now: Date = Date()) -> [TodoDisplayGroup] {
+        let normalizedGroups = TodoGroupResolver.normalizedGroups(groups)
+        let sortedItems = sorted(items, groups: normalizedGroups, now: now)
+
+        return normalizedGroups.compactMap { group in
+            let groupItems = sortedItems.filter { TodoGroupResolver.group(for: $0, groups: normalizedGroups).id == group.id }
+            guard !groupItems.isEmpty else { return nil }
+            return TodoDisplayGroup(group: group, items: groupItems)
+        }
+    }
+
+    private static func deadlineRank(_ deadline: Date?, now: Date) -> Int {
+        guard let deadline else { return 3 }
+        if deadline < now { return 0 }
+        if deadline.timeIntervalSince(now) <= 86_400 { return 1 }
+        return 2
     }
 }

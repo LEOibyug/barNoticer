@@ -9,7 +9,7 @@ struct barNoticerApp: App {
 
     init() {
         do {
-            modelContainer = try ModelContainer(for: TodoItem.self, DailySummary.self)
+            modelContainer = try ModelContainer(for: TodoItem.self, TodoGroup.self, DailySummary.self)
         } catch {
             fatalError("Failed to create model container: \(error)")
         }
@@ -42,6 +42,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func configure(modelContainer: ModelContainer) {
         guard islandController == nil else { return }
+
+        TodoGroupBootstrap.ensureDefaultGroup(in: modelContainer.mainContext)
 
         let controller = NotchIslandController(modelContainer: modelContainer)
         controller.start()

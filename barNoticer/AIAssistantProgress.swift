@@ -21,9 +21,9 @@ enum AIAssistantProgress: Equatable {
 
     static func progress(forToolName name: String) -> AIAssistantProgress {
         switch name {
-        case "list_active_todos", "list_completed_todos", "get_completion_stats":
+        case "list_active_todos", "list_completed_todos", "get_completion_stats", "list_groups":
             return .readingTodos
-        case "create_todo", "update_todo", "complete_todo", "delete_todo", "save_daily_summary":
+        case "create_todo", "update_todo", "complete_todo", "delete_todo", "create_group", "update_group", "delete_group", "save_daily_summary":
             return .preparingActions
         default:
             return .thinking

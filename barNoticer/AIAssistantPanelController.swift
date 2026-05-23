@@ -60,10 +60,12 @@ final class AIAssistantPanelController {
             context.duration = 0.14
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().alphaValue = 0
-        } completionHandler: { [weak self] in
-            panel.orderOut(nil)
-            self?.model?.resetSessionForContextRefresh()
-            self?.isClosing = false
+        } completionHandler: { [weak self, weak panel] in
+            Task { @MainActor [weak self, weak panel] in
+                panel?.orderOut(nil)
+                self?.model?.resetSessionForContextRefresh()
+                self?.isClosing = false
+            }
         }
     }
 
@@ -76,11 +78,14 @@ final class AIAssistantPanelController {
     }
 
     private func observeHeight(for model: AIAssistantModel, panel: NSPanel) {
-        heightCancellable = Publishers.CombineLatest3(model.$hasVisibleConversation, model.$hasTransientOutput, model.$state)
-            .map { hasVisibleConversation, hasTransientOutput, state in
+        heightCancellable = Publishers.CombineLatest3(model.$response, model.$proposals, model.$state)
+            .map { response, proposals, state in
                 AIAssistantPanelChrome.size(
-                    hasVisibleConversation: hasVisibleConversation,
-                    hasTransientOutput: hasTransientOutput || state.isFailure
+                    outputKind: AIAssistantPanelChrome.outputKind(
+                        response: response,
+                        proposals: proposals,
+                        state: state
+                    )
                 )
             }
             .removeDuplicates()
@@ -121,17 +126,47 @@ final class AIAssistantPanelController {
 }
 
 enum AIAssistantPanelChrome {
+    enum OutputKind: Equatable {
+        case none
+        case response
+        case actionConfirmation
+    }
+
     static let compactSize = CGSize(width: 720, height: 128)
+    static let responseSize = CGSize(width: 720, height: 320)
     static let expandedSize = CGSize(width: 720, height: 520)
     static let size = compactSize
     static let cornerRadius: CGFloat = 22
 
     static func size(hasVisibleConversation: Bool, hasTransientOutput: Bool) -> CGSize {
-        hasTransientOutput ? expandedSize : compactSize
+        hasTransientOutput ? responseSize : compactSize
     }
 
     static func size(hasOutput: Bool) -> CGSize {
         size(hasVisibleConversation: hasOutput, hasTransientOutput: hasOutput)
+    }
+
+    static func size(outputKind: OutputKind) -> CGSize {
+        switch outputKind {
+        case .none:
+            return compactSize
+        case .response:
+            return responseSize
+        case .actionConfirmation:
+            return expandedSize
+        }
+    }
+
+    static func outputKind(response: String, proposals: [AIActionProposal], state: AIAssistantModel.State) -> OutputKind {
+        if !proposals.isEmpty {
+            return .actionConfirmation
+        }
+
+        if state.isFailure || AIVisibleResponse.hasVisibleContent(response) {
+            return .response
+        }
+
+        return .none
     }
 
     static func makePanel(contentView: NSView, onResignFocus: (() -> Void)? = nil) -> NSPanel {

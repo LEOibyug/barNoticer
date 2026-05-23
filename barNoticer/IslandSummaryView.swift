@@ -13,6 +13,7 @@ struct IslandSummaryView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var contentVisibility: IslandContentVisibilityModel
     @Query private var todoItems: [TodoItem]
+    @Query private var storedGroups: [TodoGroup]
 
     var openMainWindow: () -> Void = {}
 
@@ -30,15 +31,15 @@ struct IslandSummaryView: View {
     }
 
     private var activeItems: [TodoItem] {
-        TodoSorter.sorted(todoItems).filter { !$0.isCompleted }
+        TodoSorter.sorted(todoItems, groups: groups).filter { !$0.isCompleted }
     }
 
-    private var standardVisibleItems: [TodoItem] {
-        Array(activeItems.prefix(4))
+    private var groups: [TodoGroup] {
+        TodoGroupResolver.normalizedGroups(storedGroups)
     }
 
-    private var visibleGroups: [TodoPriorityGroup] {
-        TodoSorter.priorityGroups(standardVisibleItems)
+    private var visibleDisplayGroups: [TodoDisplayGroup] {
+        TodoSorter.displayGroups(items: Array(activeItems.prefix(6)), groups: groups)
     }
 
     private var topBridgeHeight: CGFloat {
@@ -171,6 +172,44 @@ struct IslandSummaryView: View {
                     .tint(.white)
                     .onSubmit(addTodo)
             }
+
+            Menu {
+                ForEach(groups) { group in
+                    Button {
+                        quickAddDraft.groupID = group.id
+                    } label: {
+                        Label(group.name, systemImage: "folder")
+                    }
+                }
+            } label: {
+                Image(systemName: "folder")
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 22, height: 22)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .foregroundStyle(.white.opacity(0.82))
+            .help("选择分组")
+
+            Menu {
+                Button("无截止") {
+                    quickAddDraft.deadlineAt = nil
+                }
+                Button("今天晚些时候") {
+                    quickAddDraft.deadlineAt = Date().addingTimeInterval(3_600)
+                }
+                Button("明天") {
+                    quickAddDraft.deadlineAt = Date().addingTimeInterval(86_400)
+                }
+            } label: {
+                Image(systemName: quickAddDraft.deadlineAt == nil ? "calendar.badge.plus" : "calendar")
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 22, height: 22)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .foregroundStyle(.white.opacity(0.82))
+            .help("设置截止时间")
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 5)
@@ -196,13 +235,13 @@ struct IslandSummaryView: View {
 
     private var standardTodoContent: some View {
         Group {
-            if visibleGroups.isEmpty {
+            if visibleDisplayGroups.isEmpty {
                 emptyState
             } else {
                 ScrollView(.vertical) {
                     VStack(spacing: 8) {
-                        ForEach(visibleGroups) { group in
-                            IslandPrioritySection(group: group)
+                        ForEach(visibleDisplayGroups) { displayGroup in
+                            IslandDisplayGroupSection(displayGroup: displayGroup, groups: groups)
                         }
                     }
                     .padding(.vertical, 1)
@@ -215,7 +254,7 @@ struct IslandSummaryView: View {
     private var wideTodoContent: some View {
         HStack(alignment: .top, spacing: 10) {
             ForEach(TodoPriority.allCases) { priority in
-                IslandPriorityColumn(priority: priority, items: wideItems(for: priority))
+                IslandPriorityColumn(priority: priority, items: wideItems(for: priority), groups: groups)
             }
         }
     }
@@ -247,7 +286,7 @@ struct IslandSummaryView: View {
             return nil
         }
 
-        return activeItems.count > standardVisibleItems.count ? "还有 \(activeItems.count - standardVisibleItems.count) 项未显示" : "顶部中央悬停可快速查看"
+        return activeItems.count > 6 ? "还有 \(activeItems.count - 6) 项未显示" : "顶部中央悬停可快速查看"
     }
 
     private var trimmedDraftTitle: String {
@@ -258,7 +297,12 @@ struct IslandSummaryView: View {
         let title = trimmedDraftTitle
         guard !title.isEmpty else { return }
 
-        modelContext.insert(TodoItem(title: title, priority: quickAddDraft.priority))
+        modelContext.insert(TodoItem(
+            title: title,
+            priority: quickAddDraft.priority,
+            groupID: quickAddDraft.groupID,
+            deadlineAt: quickAddDraft.deadlineAt
+        ))
         quickAddDraft.clearTitle()
     }
 
@@ -270,6 +314,7 @@ struct IslandSummaryView: View {
 private struct IslandPriorityColumn: View {
     let priority: TodoPriority
     let items: [TodoItem]
+    let groups: [TodoGroup]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -296,7 +341,7 @@ private struct IslandPriorityColumn: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                        IslandTodoLine(item: item)
+                        IslandTodoLine(item: item, groups: groups)
 
                         if index < items.count - 1 {
                             Divider()
@@ -318,34 +363,36 @@ private struct IslandPriorityColumn: View {
     }
 }
 
-private struct IslandPrioritySection: View {
-    let group: TodoPriorityGroup
+private struct IslandDisplayGroupSection: View {
+    let displayGroup: TodoDisplayGroup
+    let groups: [TodoGroup]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 7) {
-                Image(systemName: group.priority.systemImage)
+                Circle()
+                    .fill(displayGroup.group.color)
+                    .frame(width: 8, height: 8)
+
+                Text(displayGroup.group.name)
                     .font(.caption.weight(.semibold))
 
-                Text("\(group.priority.title)重要性")
-                    .font(.caption.weight(.semibold))
-
-                Text("\(group.items.count)")
+                Text("\(displayGroup.items.count)")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.black.opacity(0.82))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(group.priority.islandColor, in: Capsule())
+                    .background(displayGroup.group.color, in: Capsule())
 
                 Spacer(minLength: 8)
             }
-            .foregroundStyle(group.priority.islandColor)
+            .foregroundStyle(displayGroup.group.color)
 
             VStack(spacing: 0) {
-                ForEach(Array(group.items.enumerated()), id: \.element.id) { index, item in
-                    IslandTodoLine(item: item)
+                ForEach(Array(displayGroup.items.enumerated()), id: \.element.id) { index, item in
+                    IslandTodoLine(item: item, groups: groups)
 
-                    if index < group.items.count - 1 {
+                    if index < displayGroup.items.count - 1 {
                         Divider()
                             .overlay(.white.opacity(IslandSummaryStyle.dividerOpacity))
                             .padding(.leading, 29)
@@ -358,13 +405,14 @@ private struct IslandPrioritySection: View {
         .background(.white.opacity(IslandSummaryStyle.itemBackgroundOpacity), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .stroke(group.priority.islandColor.opacity(0.18), lineWidth: 1)
+                .stroke(displayGroup.group.color.opacity(0.26), lineWidth: 1)
         }
     }
 }
 
 private struct IslandTodoLine: View {
     @Bindable var item: TodoItem
+    let groups: [TodoGroup]
 
     var body: some View {
         HStack(spacing: 10) {
@@ -388,10 +436,17 @@ private struct IslandTodoLine: View {
                     .foregroundStyle(.white.opacity(0.92))
                     .lineLimit(1)
 
-                Text(TodoAgeFormatter.elapsedText(since: item.createdAt))
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.white.opacity(IslandSummaryStyle.tertiaryTextOpacity))
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(TodoAgeFormatter.elapsedText(since: item.createdAt))
+                    Text(TodoGroupResolver.group(for: item, groups: groups).name)
+                    if let deadlineAt = item.deadlineAt {
+                        Text(TodoDeadlineFormatter.cardText(for: deadlineAt))
+                            .foregroundStyle(deadlineAt < Date() ? .red.opacity(0.92) : .white.opacity(IslandSummaryStyle.tertiaryTextOpacity))
+                    }
+                }
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.white.opacity(IslandSummaryStyle.tertiaryTextOpacity))
+                .lineLimit(1)
             }
 
             Spacer(minLength: 8)
@@ -436,5 +491,5 @@ private struct TopAttachedIslandShape: Shape {
 
 #Preview {
     IslandSummaryView()
-        .modelContainer(for: [TodoItem.self, DailySummary.self], inMemory: true)
+        .modelContainer(for: [TodoItem.self, TodoGroup.self, DailySummary.self], inMemory: true)
 }

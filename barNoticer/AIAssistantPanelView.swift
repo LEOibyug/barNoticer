@@ -18,6 +18,7 @@ enum AIAssistantPanelStyle {
     static let tertiaryTextOpacity = 0.78
     static let subtleTextOpacity = 0.74
     static let borderOpacity = 0.32
+    static let resetsResponseScrollOnContentChange = true
 }
 
 struct AIAssistantPanelView: View {
@@ -82,6 +83,7 @@ struct AIAssistantPanelView: View {
             if hasVisibleResponse {
                 Divider().overlay(.white.opacity(0.2))
                 AIAssistantResponseView(model: model)
+                    .id(model.response)
             }
 
             if case let .failed(message) = model.state {
@@ -241,6 +243,12 @@ private struct AIProposalRow: View {
             return "修改事项"
         case .createTodo:
             return "新增事项"
+        case .createGroup:
+            return "新增分组"
+        case .updateGroup:
+            return "修改分组"
+        case .deleteGroup:
+            return "删除分组"
         case .saveDailySummary:
             return "保存总结"
         }
@@ -277,10 +285,18 @@ private struct AITodoReferenceCard: View {
                     .lineLimit(1)
 
                 if todo.exists {
-                    Text(todo.ageText)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.white.opacity(AIAssistantPanelStyle.tertiaryTextOpacity))
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(todo.ageText)
+                        if let groupName = todo.groupName {
+                            Text(groupName)
+                        }
+                        if let deadlineAt = todo.deadlineAt {
+                            Text(TodoDeadlineFormatter.cardText(for: deadlineAt))
+                        }
+                    }
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.white.opacity(AIAssistantPanelStyle.tertiaryTextOpacity))
+                    .lineLimit(1)
                 }
             }
 

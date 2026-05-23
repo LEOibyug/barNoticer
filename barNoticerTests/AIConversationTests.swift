@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 @testable import barNoticer
 
 final class AIConversationTests: XCTestCase {
@@ -73,6 +74,22 @@ final class AIConversationTests: XCTestCase {
         ])
     }
 
+    func testTodoReferenceParserKeepsTextAndMultipleReferencesFromLoggedReply() {
+        let first = UUID(uuidString: "56272897-7575-4190-8424-F3599BD5FCA7")!
+        let second = UUID(uuidString: "F64E0416-573E-4A83-B16F-0A4C005979C6")!
+        let third = UUID(uuidString: "1A571905-E64F-4D23-BD61-3371A9E4AFFE")!
+
+        let parts = AITodoReferenceParser.parse("目前有 3 项未完成待办： 默认分组：[[todo:\(first.uuidString)]] 课程分组：[[todo:\(second.uuidString)]][[todo:\(third.uuidString)]]")
+
+        XCTAssertEqual(parts, [
+            .text("目前有 3 项未完成待办： 默认分组："),
+            .todo(first),
+            .text("课程分组："),
+            .todo(second),
+            .todo(third)
+        ])
+    }
+
     func testSanitizedResponseCanDetectInvisibleModelOutput() {
         XCTAssertFalse(AIVisibleResponse.hasVisibleContent("   \n\n"))
         XCTAssertFalse(AIVisibleResponse.hasVisibleContent("- **"))
@@ -129,6 +146,12 @@ final class AIConversationTests: XCTestCase {
         XCTAssertTrue(AISystemPrompt.text.contains("不要使用 Markdown"))
     }
 
+    func testSystemPromptUsesCurrentContextForRelativeDates() {
+        XCTAssertTrue(AISystemPrompt.text.contains("相对日期"))
+        XCTAssertTrue(AISystemPrompt.text.contains("今天、明天、下周"))
+        XCTAssertTrue(AISystemPrompt.text.contains("当前日期"))
+    }
+
     func testRequestBuilderIncludesInlineTodoContextBeforeConversation() {
         var history = AIConversationHistory(maxTurns: 3)
         history.appendUser("帮我分析")
@@ -145,13 +168,176 @@ final class AIConversationTests: XCTestCase {
 
     func testInlineTodoContextContainsReferenceableIDsAndGroupedPriorities() {
         let id = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
-        let item = TodoItem(id: id, title: "准备周报", priority: .high)
-        let snapshot = AITodoContext.snapshot(items: [item])
+        let group = TodoGroup(name: "工作", colorHex: "#3B82F6", sortOrder: 1)
+        let deadline = Date(timeIntervalSince1970: 1_700_000_000)
+        let item = TodoItem(id: id, title: "准备周报", priority: .high, groupID: group.id, deadlineAt: deadline)
+        let snapshot = AITodoContext.snapshot(items: [item], groups: [group])
 
         let context = snapshot.inlineContext().content
 
         XCTAssertTrue(context.contains(id.uuidString))
         XCTAssertTrue(context.contains("高重要性"))
+        XCTAssertTrue(context.contains("group=工作"))
+        XCTAssertTrue(context.contains("deadlineAt="))
         XCTAssertTrue(context.contains("[[todo:<UUID>]]"))
     }
+
+    func testInlineTodoContextContainsCurrentDateAndTimezoneForRelativeDates() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let snapshot = AITodoContext.snapshot(items: [], groups: [], now: now)
+
+        let context = snapshot.inlineContext(now: now, timeZone: TimeZone(secondsFromGMT: 8 * 3_600)!).content
+
+        XCTAssertTrue(context.contains("当前日期时间："))
+        XCTAssertTrue(context.contains("时区：GMT+08:00"))
+        XCTAssertTrue(context.contains("相对日期"))
+    }
+
+    @MainActor
+    func testAssistantWritesUserPromptAndVisibleReplyToDebugLog() async throws {
+        let suiteName = "AIConversationLogTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        AISettings(baseURL: URL(string: "https://example.com/v1")!, model: "model").save(to: defaults)
+        let keyStore = AIAPIKeyStore(defaults: defaults)
+        keyStore.saveAPIKey("sk-test")
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AIConversationLogTests-\(UUID().uuidString)")
+        let logStore = AppDebugLogStore(directory: directory, retentionDays: 7, maxFileSize: 8_192)
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [AIConversationLogURLProtocol.self]
+        AIConversationLogURLProtocol.responseBody = #"{"choices":[{"message":{"content":"建议先完成高优先级事项。"}}]}"#
+
+        let container = try ModelContainer(
+            for: TodoItem.self, TodoGroup.self, DailySummary.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let model = AIAssistantModel(
+            modelContext: container.mainContext,
+            client: AIClient(session: URLSession(configuration: sessionConfiguration)),
+            apiKeyStore: keyStore,
+            defaults: defaults,
+            logStore: logStore
+        )
+
+        model.prompt = "今天该做什么"
+        model.submit()
+
+        try await waitUntil {
+            if case .ready = model.state {
+                return true
+            }
+            return false
+        }
+
+        let content = try String(contentsOf: logStore.logFileURL, encoding: .utf8)
+        XCTAssertTrue(content.contains("[AIChat] User"))
+        XCTAssertTrue(content.contains("content=今天该做什么"))
+        XCTAssertTrue(content.contains("[AIChat] Assistant"))
+        XCTAssertTrue(content.contains("content=建议先完成高优先级事项。"))
+    }
+
+    @MainActor
+    func testAssistantClearsVisibleOutputWhileWaitingForNextReply() async throws {
+        let suiteName = "AIConversationLoadingStateTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        AISettings(baseURL: URL(string: "https://example.com/v1")!, model: "model").save(to: defaults)
+        let keyStore = AIAPIKeyStore(defaults: defaults)
+        keyStore.saveAPIKey("sk-test")
+
+        let container = try ModelContainer(
+            for: TodoItem.self, TodoGroup.self, DailySummary.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [AIConversationLogURLProtocol.self]
+        let model = AIAssistantModel(
+            modelContext: container.mainContext,
+            client: AIClient(session: URLSession(configuration: sessionConfiguration)),
+            apiKeyStore: keyStore,
+            defaults: defaults,
+            logStore: AppDebugLogStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("AIConversationLoadingStateTests-\(UUID().uuidString)"))
+        )
+
+        AIConversationLogURLProtocol.responseBody = #"{"choices":[{"message":{"content":"上一轮回复"}}]}"#
+        AIConversationLogURLProtocol.responseDelay = 0
+        model.prompt = "第一问"
+        model.submit()
+
+        try await waitUntil {
+            model.response == "上一轮回复"
+        }
+
+        AIConversationLogURLProtocol.responseBody = #"{"choices":[{"message":{"content":"新回复"}}]}"#
+        AIConversationLogURLProtocol.responseDelay = 0.25
+        model.prompt = "第二问"
+        model.submit()
+
+        XCTAssertEqual(model.response, "")
+        XCTAssertFalse(model.hasTransientOutput)
+        XCTAssertEqual(model.state, .loading)
+
+        try await waitUntil {
+            model.response == "新回复"
+        }
+
+        AIConversationLogURLProtocol.responseDelay = 0
+    }
+}
+
+private final class AIConversationLogURLProtocol: URLProtocol {
+    static var responseBody = #"{"choices":[{"message":{"content":"OK"}}]}"#
+    static var responseDelay: TimeInterval = 0
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        let sendResponse = { [weak self] in
+            guard let self else { return }
+            let data = Data(Self.responseBody.utf8)
+            let response = HTTPURLResponse(
+                url: self.request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            self.client?.urlProtocol(self, didLoad: data)
+            self.client?.urlProtocolDidFinishLoading(self)
+        }
+
+        if Self.responseDelay > 0 {
+            DispatchQueue.global().asyncAfter(deadline: .now() + Self.responseDelay, execute: sendResponse)
+        } else {
+            sendResponse()
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+private func waitUntil(
+    timeout: TimeInterval = 2,
+    condition: @MainActor @escaping () -> Bool
+) async throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if await condition() {
+            return
+        }
+        try await Task.sleep(nanoseconds: 20_000_000)
+    }
+    XCTFail("Timed out waiting for condition")
 }

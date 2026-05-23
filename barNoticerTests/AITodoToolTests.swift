@@ -5,16 +5,20 @@ import SwiftData
 final class AITodoToolTests: XCTestCase {
     func testSnapshotGroupsTodosAndComputesCompletionStats() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let work = TodoGroup(name: "工作", colorHex: "#3B82F6", sortOrder: 1)
         let items = [
-            TodoItem(title: "High active", priority: .high, createdAt: now.addingTimeInterval(-7_200)),
+            TodoItem(title: "High active", priority: .high, groupID: work.id, deadlineAt: now.addingTimeInterval(3_600), createdAt: now.addingTimeInterval(-7_200)),
             TodoItem(title: "Low active", priority: .low, createdAt: now.addingTimeInterval(-3_600)),
             TodoItem(title: "Done", priority: .medium, isCompleted: true, createdAt: now.addingTimeInterval(-10_800), updatedAt: now)
         ]
 
-        let snapshot = AITodoContext.snapshot(items: items, dailySummaries: [], now: now)
+        let snapshot = AITodoContext.snapshot(items: items, groups: [work], dailySummaries: [], now: now)
 
         XCTAssertEqual(snapshot.activeByPriority[.high]?.map(\.title), ["High active"])
         XCTAssertEqual(snapshot.activeByPriority[.low]?.map(\.title), ["Low active"])
+        XCTAssertEqual(snapshot.groups.map(\.name), ["默认分组", "工作"])
+        XCTAssertEqual(snapshot.activeByGroup.last?.items.first?.groupName, "工作")
+        XCTAssertEqual(snapshot.activeByGroup.last?.items.first?.deadlineAt, now.addingTimeInterval(3_600))
         XCTAssertEqual(snapshot.completed.map(\.title), ["Done"])
         XCTAssertEqual(snapshot.stats.activeCount, 2)
         XCTAssertEqual(snapshot.stats.completedCount, 1)
@@ -22,13 +26,18 @@ final class AITodoToolTests: XCTestCase {
     }
 
     func testCreateAndModifyRequestsBecomePendingActionProposals() {
+        let groupID = UUID()
+        let deadline = Date(timeIntervalSince1970: 1_700_000_000)
         let create = AIActionProposal.createTodo(title: "Plan v2", priority: .high)
         let id = UUID()
-        let update = AIActionProposal.updateTodo(id: id, title: "Plan v2 carefully", priority: .medium)
+        let update = AIActionProposal.updateTodo(id: id, title: "Plan v2 carefully", priority: .medium, groupID: groupID, deadlineAt: deadline, clearsDeadline: false)
         let complete = AIActionProposal.completeTodo(id: id)
         let delete = AIActionProposal.deleteTodo(id: id)
+        let createWithMetadata = AIActionProposal.createTodo(title: "Plan v3", priority: .high, groupID: groupID, deadlineAt: deadline)
 
         XCTAssertEqual(create.summary, "新增高重要性事项：Plan v2")
+        XCTAssertEqual(createWithMetadata.groupID, groupID)
+        XCTAssertEqual(createWithMetadata.deadlineAt, deadline)
         XCTAssertEqual(update.summary, "修改事项：Plan v2 carefully，重要性：中")
         XCTAssertEqual(complete.summary, "完成事项：\(id.uuidString)")
         XCTAssertEqual(delete.summary, "删除事项：\(id.uuidString)")
@@ -50,7 +59,7 @@ final class AITodoToolTests: XCTestCase {
     @MainActor
     func testDeleteTodoToolCreatesPendingProposalAndAppliesDeletion() throws {
         let container = try ModelContainer(
-            for: TodoItem.self, DailySummary.self,
+            for: TodoItem.self, TodoGroup.self, DailySummary.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
         let item = TodoItem(title: "Remove me", priority: .medium)
@@ -75,7 +84,7 @@ final class AITodoToolTests: XCTestCase {
     @MainActor
     func testAssistantAppliesProposalsImmediatelyWhenConfirmationIsDisabled() throws {
         let container = try ModelContainer(
-            for: TodoItem.self, DailySummary.self,
+            for: TodoItem.self, TodoGroup.self, DailySummary.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
         let model = AIAssistantModel(modelContext: container.mainContext)
@@ -93,7 +102,7 @@ final class AITodoToolTests: XCTestCase {
     @MainActor
     func testAssistantKeepsProposalsPendingWhenConfirmationIsEnabled() throws {
         let container = try ModelContainer(
-            for: TodoItem.self, DailySummary.self,
+            for: TodoItem.self, TodoGroup.self, DailySummary.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
         let model = AIAssistantModel(modelContext: container.mainContext)
@@ -115,5 +124,57 @@ final class AITodoToolTests: XCTestCase {
         XCTAssertEqual(AIAssistantProgress.progress(forToolName: "list_active_todos"), .readingTodos)
         XCTAssertEqual(AIAssistantProgress.progress(forToolName: "create_todo"), .preparingActions)
         XCTAssertEqual(AIAssistantProgress.progress(forToolName: "delete_todo"), .preparingActions)
+    }
+
+    @MainActor
+    func testCreateTodoToolAcceptsGroupAndDeadline() throws {
+        let container = try ModelContainer(
+            for: TodoItem.self, TodoGroup.self, DailySummary.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let group = TodoGroup(name: "工作", colorHex: "#3B82F6", sortOrder: 1)
+        container.mainContext.insert(group)
+        let executor = AIToolExecutor(modelContext: container.mainContext)
+        let deadline = ISO8601DateFormatter().date(from: "2026-05-23T18:30:00Z")
+        let call = AIToolCall(
+            id: "create-call",
+            type: "function",
+            function: .init(name: "create_todo", arguments: #"{"title":"写周报","priority":"high","group_id":"\#(group.id.uuidString)","deadline_at":"2026-05-23T18:30:00Z"}"#)
+        )
+
+        let result = try executor.handle(call)
+
+        guard case let .proposal(.createTodo(_, title, priority, groupID, deadlineAt)) = result else {
+            return XCTFail("Expected create todo proposal")
+        }
+        XCTAssertEqual(title, "写周报")
+        XCTAssertEqual(priority, .high)
+        XCTAssertEqual(groupID, group.id)
+        XCTAssertEqual(deadlineAt, deadline)
+    }
+
+    @MainActor
+    func testGroupToolsCreateUpdateListAndDeleteGroups() throws {
+        let container = try ModelContainer(
+            for: TodoItem.self, TodoGroup.self, DailySummary.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let executor = AIToolExecutor(modelContext: container.mainContext)
+        let create = AIToolCall(
+            id: "group-create",
+            type: "function",
+            function: .init(name: "create_group", arguments: ##"{"name":"工作","color_hex":"#3B82F6"}"##)
+        )
+
+        guard case let .proposal(.createGroup(_, name, colorHex)) = try executor.handle(create) else {
+            return XCTFail("Expected create group proposal")
+        }
+
+        XCTAssertEqual(name, "工作")
+        XCTAssertEqual(colorHex, "#3B82F6")
+
+        try executor.apply(.createGroup(name: name, colorHex: colorHex))
+        let groups = try container.mainContext.fetch(FetchDescriptor<TodoGroup>())
+        XCTAssertEqual(groups.map(\.name), ["工作"])
     }
 }

@@ -6,6 +6,8 @@ final class TodoItem {
     var id: UUID
     var title: String
     var priorityRawValue: String
+    var groupID: UUID?
+    var deadlineAt: Date?
     var isCompleted: Bool
     var createdAt: Date
     var updatedAt: Date
@@ -28,10 +30,22 @@ final class TodoItem {
         updatedAt = Date()
     }
 
+    func updateGroup(_ groupID: UUID?) {
+        self.groupID = groupID == TodoGroup.defaultGroupID ? nil : groupID
+        updatedAt = Date()
+    }
+
+    func updateDeadline(_ deadlineAt: Date?) {
+        self.deadlineAt = deadlineAt
+        updatedAt = Date()
+    }
+
     init(
         id: UUID = UUID(),
         title: String,
         priority: TodoPriority = .medium,
+        groupID: UUID? = nil,
+        deadlineAt: Date? = nil,
         isCompleted: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -39,6 +53,8 @@ final class TodoItem {
         self.id = id
         self.title = title
         self.priorityRawValue = priority.rawValue
+        self.groupID = groupID == TodoGroup.defaultGroupID ? nil : groupID
+        self.deadlineAt = deadlineAt
         self.isCompleted = isCompleted
         self.createdAt = createdAt
         self.updatedAt = updatedAt

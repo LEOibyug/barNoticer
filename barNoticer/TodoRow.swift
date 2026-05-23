@@ -4,8 +4,11 @@ import SwiftUI
 struct TodoRow: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var item: TodoItem
+    let groups: [TodoGroup]
 
     @State private var editedTitle = ""
+    @State private var hasDeadline = false
+    @State private var editedDeadline = Date().addingTimeInterval(3_600)
     @FocusState private var isTitleFocused: Bool
 
     var body: some View {
@@ -13,14 +16,20 @@ struct TodoRow: View {
             completionButton
             VStack(alignment: .leading, spacing: 4) {
                 titleField
-                Text(TodoAgeFormatter.elapsedText(since: item.createdAt))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                metadata
             }
+            groupPicker
             priorityPicker
+            deadlineEditor
             deleteButton
         }
         .padding(.vertical, 6)
+        .onAppear {
+            syncDeadlineState()
+        }
+        .onChange(of: item.deadlineAt) { _, _ in
+            syncDeadlineState()
+        }
     }
 
     private var completionButton: some View {
@@ -67,6 +76,60 @@ struct TodoRow: View {
         .tint(item.priority.color)
     }
 
+    private var groupPicker: some View {
+        Picker("分组", selection: Binding(
+            get: { item.groupID ?? TodoGroup.defaultGroupID },
+            set: { item.updateGroup($0) }
+        )) {
+            ForEach(groups) { group in
+                Text(group.name).tag(group.id)
+            }
+        }
+        .pickerStyle(.menu)
+        .frame(width: 104)
+    }
+
+    private var deadlineEditor: some View {
+        HStack(spacing: 6) {
+            Toggle("", isOn: Binding(
+                get: { hasDeadline },
+                set: { enabled in
+                    hasDeadline = enabled
+                    item.updateDeadline(enabled ? editedDeadline : nil)
+                }
+            ))
+            .labelsHidden()
+            .toggleStyle(.checkbox)
+            .help("设置截止时间")
+
+            if hasDeadline {
+                DatePicker("", selection: Binding(
+                    get: { editedDeadline },
+                    set: { date in
+                        editedDeadline = date
+                        item.updateDeadline(date)
+                    }
+                ), displayedComponents: [.date, .hourAndMinute])
+                .labelsHidden()
+                .frame(width: 156)
+            }
+        }
+    }
+
+    private var metadata: some View {
+        HStack(spacing: 8) {
+            Text(TodoAgeFormatter.elapsedText(since: item.createdAt))
+            Text(TodoGroupResolver.group(for: item, groups: groups).name)
+            if let deadlineAt = item.deadlineAt {
+                Text(TodoDeadlineFormatter.cardText(for: deadlineAt))
+                    .foregroundStyle(deadlineAt < Date() ? .red : .secondary)
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+    }
+
     private var deleteButton: some View {
         Button(role: .destructive) {
             modelContext.delete(item)
@@ -86,6 +149,15 @@ struct TodoRow: View {
 
         if trimmedTitle != item.title {
             item.updateTitle(trimmedTitle)
+        }
+    }
+
+    private func syncDeadlineState() {
+        if let deadlineAt = item.deadlineAt {
+            hasDeadline = true
+            editedDeadline = deadlineAt
+        } else {
+            hasDeadline = false
         }
     }
 }

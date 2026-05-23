@@ -58,12 +58,14 @@ final class AIAssistantModel: ObservableObject {
         guard !text.isEmpty else { return }
 
         prompt = ""
+        response = ""
+        proposals = []
         state = .loading
         progress = .thinking
         conversation.appendUser(text)
-        proposals = []
         syncConversationState()
         log(.info, "AI request started", metadata: ["promptLength": "\(text.count)"])
+        logChat(role: "User", content: text)
 
         Task {
             await run(prompt: text)
@@ -142,6 +144,7 @@ final class AIAssistantModel: ObservableObject {
                     response = AIVisibleResponse.fallbackText(toolCallCount: 0, proposalCount: 0)
                 }
                 conversation.appendAssistant(response)
+                logChat(role: "Assistant", content: response)
                 state = .ready
                 progress = .idle
                 syncConversationState()
@@ -184,6 +187,7 @@ final class AIAssistantModel: ObservableObject {
                 : visibleFinal
             response = visibleResponse
             conversation.appendAssistant(visibleResponse)
+            logChat(role: "Assistant", content: visibleResponse)
             state = .ready
             progress = .idle
             syncConversationState()
@@ -210,9 +214,20 @@ final class AIAssistantModel: ObservableObject {
         guard let items = try? modelContext.fetch(FetchDescriptor<TodoItem>()),
               let item = items.first(where: { $0.id == id })
         else {
-            return AIReferencedTodo(id: id, title: "事项", priority: .low, createdAt: nil, isCompleted: false, exists: false)
+            return AIReferencedTodo(id: id, title: "事项", priority: .low, groupName: nil, deadlineAt: nil, createdAt: nil, isCompleted: false, exists: false)
         }
-        return AIReferencedTodo(id: id, title: item.title, priority: item.priority, createdAt: item.createdAt, isCompleted: item.isCompleted, exists: true)
+        let groups = (try? modelContext.fetch(FetchDescriptor<TodoGroup>())) ?? []
+        let group = TodoGroupResolver.group(for: item, groups: groups)
+        return AIReferencedTodo(
+            id: id,
+            title: item.title,
+            priority: item.priority,
+            groupName: group.name,
+            deadlineAt: item.deadlineAt,
+            createdAt: item.createdAt,
+            isCompleted: item.isCompleted,
+            exists: true
+        )
     }
 
     func titleForReferencedTodo(id: UUID) -> String {
@@ -221,14 +236,15 @@ final class AIAssistantModel: ObservableObject {
 
     private func syncConversationState() {
         hasVisibleConversation = conversation.hasVisibleContent
-        hasTransientOutput = !response.isEmpty || !proposals.isEmpty || state.isFailure || state == .loading
+        hasTransientOutput = !response.isEmpty || !proposals.isEmpty || state.isFailure
     }
 
     private func makeInlineContext() -> AITodoInlineContext {
         do {
             let items = try modelContext.fetch(FetchDescriptor<TodoItem>())
             let summaries = try modelContext.fetch(FetchDescriptor<DailySummary>())
-            return AITodoContext.snapshot(items: items, dailySummaries: summaries).inlineContext()
+            let groups = try modelContext.fetch(FetchDescriptor<TodoGroup>())
+            return AITodoContext.snapshot(items: items, groups: groups, dailySummaries: summaries).inlineContext()
         } catch {
             log(.error, "AI inline context failed", metadata: ["error": error.localizedDescription])
             return AITodoInlineContext(content: "当前任务上下文读取失败，必要时请调用工具重新读取。")
@@ -242,12 +258,38 @@ final class AIAssistantModel: ObservableObject {
     private func log(_ level: AppDebugLogStore.Level, _ message: String, metadata: [String: String] = [:]) {
         try? logStore.write(level, category: "AI", message: message, metadata: metadata)
     }
+
+    private func logChat(role: String, content: String) {
+        try? logStore.write(.info, category: "AIChat", message: role, metadata: ["content": content])
+        guard role == "Assistant" else { return }
+        let parts = AITodoReferenceParser.parse(content)
+        let todoReferenceCount = parts.filter { part in
+            if case .todo = part {
+                return true
+            }
+            return false
+        }.count
+        let textPartCount = parts.filter { part in
+            if case let .text(text) = part {
+                return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            return false
+        }.count
+        try? logStore.write(
+            .debug,
+            category: "AIChat",
+            message: "Assistant render parts",
+            metadata: ["textParts": "\(textPartCount)", "todoReferences": "\(todoReferenceCount)"]
+        )
+    }
 }
 
 struct AIReferencedTodo: Equatable, Identifiable {
     let id: UUID
     let title: String
     let priority: TodoPriority
+    let groupName: String?
+    let deadlineAt: Date?
     let createdAt: Date?
     let isCompleted: Bool
     let exists: Bool

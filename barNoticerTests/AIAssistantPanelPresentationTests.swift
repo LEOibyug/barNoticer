@@ -33,15 +33,35 @@ final class AIAssistantPanelPresentationTests: XCTestCase {
         )
     }
 
-    func testAssistantPanelExpandsForLatestVisibleOutput() {
+    func testAssistantPanelUsesIntermediateHeightForLatestVisibleReply() {
         XCTAssertEqual(
-            AIAssistantPanelChrome.size(hasVisibleConversation: true, hasTransientOutput: true),
-            AIAssistantPanelChrome.expandedSize
+            AIAssistantPanelChrome.size(outputKind: .response),
+            AIAssistantPanelChrome.responseSize
         )
     }
 
     func testAssistantPanelExpandedHeightLeavesRoomForActionConfirmation() {
+        XCTAssertEqual(
+            AIAssistantPanelChrome.size(outputKind: .actionConfirmation),
+            AIAssistantPanelChrome.expandedSize
+        )
         XCTAssertGreaterThanOrEqual(AIAssistantPanelChrome.expandedSize.height, 500)
+    }
+
+    func testAssistantPanelKeepsThinkingStateCompactWithoutVisibleOutput() {
+        XCTAssertEqual(
+            AIAssistantPanelChrome.outputKind(response: "", proposals: [], state: .loading),
+            .none
+        )
+    }
+
+    func testAssistantPanelClassifiesLoggedReplyAsVisibleResponse() {
+        let response = "已修改。[[todo:43BC1C81-B449-4148-8C0A-367832AB6994]] 截止时间现在是 5 月 28 日下午 3 点，距离现在还有大约 4 天多的时间。"
+
+        XCTAssertEqual(
+            AIAssistantPanelChrome.outputKind(response: response, proposals: [], state: .ready),
+            .response
+        )
     }
 
     func testAssistantPanelStyleUsesHighContrastDarkSurfaces() {
@@ -58,6 +78,10 @@ final class AIAssistantPanelPresentationTests: XCTestCase {
     func testAssistantProgressOverlaysPromptInsteadOfAddingInputSubrow() {
         XCTAssertEqual(AIAssistantPanelStyle.progressPlacement, .promptOverlay)
         XCTAssertEqual(AIAssistantPanelStyle.promptFieldHeight, 28)
+    }
+
+    func testAssistantResponseScrollViewResetsWhenContentChanges() {
+        XCTAssertTrue(AIAssistantPanelStyle.resetsResponseScrollOnContentChange)
     }
 
     func testAssistantPanelUsesDarkAppearanceForMaterialSampling() {
