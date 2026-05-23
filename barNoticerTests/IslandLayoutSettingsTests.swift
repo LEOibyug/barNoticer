@@ -114,6 +114,25 @@ final class IslandLayoutSettingsTests: XCTestCase {
         XCTAssertEqual(previewChangeCount, 0)
     }
 
+    func testEndingPreviewSendsPreviewEndNotification() {
+        var didEndPreview = false
+        let center = NotificationCenter.default
+        let observer = center.addObserver(
+            forName: IslandLayoutSettings.previewDidEndNotification,
+            object: nil,
+            queue: nil
+        ) { _ in
+            didEndPreview = true
+        }
+        defer {
+            center.removeObserver(observer)
+        }
+
+        IslandLayoutSettings.notifyChanged(previewKind: nil)
+
+        XCTAssertTrue(didEndPreview)
+    }
+
     func testModeSwitchAnimationDurationIsDeliberatelyRelaxed() {
         XCTAssertGreaterThanOrEqual(IslandAnimationTimings.modeSwitchDuration, 0.58)
     }

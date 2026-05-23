@@ -9,7 +9,7 @@ struct barNoticerApp: App {
 
     init() {
         do {
-            modelContainer = try ModelContainer(for: TodoItem.self)
+            modelContainer = try ModelContainer(for: TodoItem.self, DailySummary.self)
         } catch {
             fatalError("Failed to create model container: \(error)")
         }
@@ -33,6 +33,8 @@ struct barNoticerApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var islandController: NotchIslandController?
+    private var assistantController: AIAssistantPanelController?
+    private var hotKeyController: GlobalHotKeyController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -44,5 +46,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = NotchIslandController(modelContainer: modelContainer)
         controller.start()
         islandController = controller
+
+        let assistant = AIAssistantPanelController(modelContext: modelContainer.mainContext)
+        assistantController = assistant
+
+        let hotKey = GlobalHotKeyController { [weak assistant] in
+            assistant?.toggle()
+        }
+        hotKey.register(shortcut: AISettings(defaults: .standard).shortcut)
+        hotKeyController = hotKey
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(aiSettingsChanged),
+            name: AISettings.didChangeNotification,
+            object: nil
+        )
+    }
+
+    @objc private func aiSettingsChanged() {
+        hotKeyController?.register(shortcut: AISettings(defaults: .standard).shortcut)
     }
 }

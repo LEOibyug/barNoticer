@@ -3,6 +3,7 @@ import Foundation
 enum SidebarSelection: Hashable {
     case filter(TodoFilter)
     case islandSettings
+    case aiSettings
 }
 
 enum TodoFilter: String, CaseIterable, Identifiable {

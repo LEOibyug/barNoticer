@@ -6,6 +6,7 @@ import SwiftUI
 final class NotchIslandController: NSObject {
     private let modelContainer: ModelContainer
     private var islandPanel: NSPanel?
+    private var mainWindow: NSWindow?
     private var hotZonePreviewPanel: NSPanel?
     private var pointerPollTimer: Timer?
     private var hideWorkItem: DispatchWorkItem?
@@ -66,10 +67,11 @@ final class NotchIslandController: NSObject {
     }
 
     func showIsland() {
-        hideWorkItem?.cancel()
-        hideWorkItem = nil
         guard let islandPanel else { return }
         guard let transition = panelState.beginShowing() else { return }
+
+        hideWorkItem?.cancel()
+        hideWorkItem = nil
 
         let plan = expansionPlan()
         let contentView = islandPanel.contentView
@@ -86,8 +88,8 @@ final class NotchIslandController: NSObject {
             islandPanel.animator().setFrame(plan.endFrame, display: true)
         } completionHandler: { [weak self, transition] in
             Task { @MainActor [weak self, transition] in
-                self?.setIslandContentVisibility(true)
-                self?.panelState.finishShowing(transition)
+                guard let self, self.panelState.finishShowing(transition) else { return }
+                self.setIslandContentVisibility(true)
             }
         }
 
@@ -148,11 +150,11 @@ final class NotchIslandController: NSObject {
             self.setIslandContentVisibility(false, animated: true)
             islandPanel.animator().setFrame(plan.startFrame, display: true)
         } completionHandler: { [weak self, transition] in
-            islandPanel.orderOut(nil)
-            islandPanel.setFrame(plan.endFrame, display: false)
             Task { @MainActor [weak self, transition] in
-                self?.setIslandContentVisibility(true)
-                self?.panelState.finishHiding(transition)
+                guard let self, self.panelState.finishHiding(transition) else { return }
+                islandPanel.orderOut(nil)
+                islandPanel.setFrame(plan.endFrame, display: false)
+                self.setIslandContentVisibility(true)
             }
         }
     }
@@ -252,14 +254,42 @@ final class NotchIslandController: NSObject {
     }
 
     private func openMainWindow() {
-        NSApp.activate()
+        NSApp.activate(ignoringOtherApps: true)
 
-        if let window = NSApp.windows.first(where: { $0.canBecomeMain && !$0.isKind(of: NSPanel.self) }) {
+        if let window = existingMainWindow() {
             window.makeKeyAndOrderFront(nil)
             return
         }
 
-        NSApp.sendAction(#selector(NSApplication.newWindowForTab(_:)), to: nil, from: nil)
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 760, height: 520),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "barNoticer"
+        window.isReleasedWhenClosed = false
+        window.center()
+        window.contentView = NSHostingView(
+            rootView: ContentView()
+                .modelContainer(modelContainer)
+        )
+        mainWindow = window
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func existingMainWindow() -> NSWindow? {
+        if let mainWindow, mainWindow.isVisible {
+            return mainWindow
+        }
+
+        return NSApp.windows.first { window in
+            Self.shouldReuseAsMainWindow(window)
+        }
+    }
+
+    static func shouldReuseAsMainWindow(_ window: NSWindow) -> Bool {
+        !window.isKind(of: NSPanel.self) && window.styleMask.contains(.titled)
     }
 
     private func positionIslandPanel() {

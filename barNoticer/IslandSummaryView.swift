@@ -1,6 +1,14 @@
 import SwiftData
 import SwiftUI
 
+enum IslandSummaryStyle {
+    static let secondaryTextOpacity = 0.78
+    static let tertiaryTextOpacity = 0.68
+    static let subtleTextOpacity = 0.64
+    static let itemBackgroundOpacity = 0.12
+    static let dividerOpacity = 0.14
+}
+
 struct IslandSummaryView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var contentVisibility: IslandContentVisibilityModel
@@ -91,7 +99,7 @@ struct IslandSummaryView: View {
                     .foregroundStyle(.white)
                 Text(activeItems.isEmpty ? "没有进行中的事项" : "\(activeItems.count) 项进行中")
                     .font(.caption)
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(.white.opacity(IslandSummaryStyle.secondaryTextOpacity))
             }
 
             Spacer()
@@ -217,7 +225,7 @@ struct IslandSummaryView: View {
             if let footerText {
                 Text(footerText)
                     .font(.caption)
-                    .foregroundStyle(.white.opacity(0.58))
+                    .foregroundStyle(.white.opacity(IslandSummaryStyle.tertiaryTextOpacity))
                     .lineLimit(1)
             }
 
@@ -283,7 +291,7 @@ private struct IslandPriorityColumn: View {
             if items.isEmpty {
                 Text("暂无")
                     .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.44))
+                    .foregroundStyle(.white.opacity(IslandSummaryStyle.subtleTextOpacity))
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .center)
             } else {
                 VStack(spacing: 0) {
@@ -292,7 +300,7 @@ private struct IslandPriorityColumn: View {
 
                         if index < items.count - 1 {
                             Divider()
-                                .overlay(.white.opacity(0.08))
+                                .overlay(.white.opacity(IslandSummaryStyle.dividerOpacity))
                                 .padding(.leading, 29)
                         }
                     }
@@ -302,7 +310,7 @@ private struct IslandPriorityColumn: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .background(.white.opacity(IslandSummaryStyle.itemBackgroundOpacity), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 13, style: .continuous)
                 .stroke(priority.islandColor.opacity(0.18), lineWidth: 1)
@@ -339,7 +347,7 @@ private struct IslandPrioritySection: View {
 
                     if index < group.items.count - 1 {
                         Divider()
-                            .overlay(.white.opacity(0.08))
+                            .overlay(.white.opacity(IslandSummaryStyle.dividerOpacity))
                             .padding(.leading, 29)
                     }
                 }
@@ -347,7 +355,7 @@ private struct IslandPrioritySection: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
-        .background(.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .background(.white.opacity(IslandSummaryStyle.itemBackgroundOpacity), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 13, style: .continuous)
                 .stroke(group.priority.islandColor.opacity(0.18), lineWidth: 1)
@@ -382,7 +390,7 @@ private struct IslandTodoLine: View {
 
                 Text(TodoAgeFormatter.elapsedText(since: item.createdAt))
                     .font(.caption2.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.46))
+                    .foregroundStyle(.white.opacity(IslandSummaryStyle.tertiaryTextOpacity))
                     .lineLimit(1)
             }
 
@@ -428,5 +436,5 @@ private struct TopAttachedIslandShape: Shape {
 
 #Preview {
     IslandSummaryView()
-        .modelContainer(for: TodoItem.self, inMemory: true)
+        .modelContainer(for: [TodoItem.self, DailySummary.self], inMemory: true)
 }

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct IslandSettingsView: View {
@@ -15,6 +16,7 @@ struct IslandSettingsView: View {
                 modeSection
                 hotZoneSection
                 islandSection
+                debugSection
                 resetButton
             }
             .padding(24)
@@ -23,9 +25,12 @@ struct IslandSettingsView: View {
         .onAppear {
             draft = IslandLayoutDraft.load(mode: selectedMode)
         }
+        .onDisappear {
+            IslandLayoutSettings.notifyChanged(previewKind: nil)
+        }
         .onChange(of: modeRawValue) { _, _ in
             draft = IslandLayoutDraft.load(mode: selectedMode)
-            IslandLayoutSettings.notifyChanged(previewKind: .island)
+            IslandLayoutSettings.notifyLayoutChanged()
         }
     }
 
@@ -77,6 +82,24 @@ struct IslandSettingsView: View {
         .buttonStyle(.bordered)
     }
 
+    private var debugSection: some View {
+        SettingsSection(title: "调试日志", subtitle: "应用会写入轻量调试日志，并自动清理过大的旧日志。") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(AppDebugLogStore.shared.logFileURL.path)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+
+                Button {
+                    openLogDirectory()
+                } label: {
+                    Label("打开日志位置", systemImage: "folder")
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
     private func reset() {
         IslandLayoutDraft.reset(mode: selectedMode)
         draft = IslandLayoutDraft.load(mode: selectedMode)
@@ -92,9 +115,14 @@ struct IslandSettingsView: View {
             }
         )
     }
+
+    private func openLogDirectory() {
+        try? FileManager.default.createDirectory(at: AppDebugLogStore.shared.directory, withIntermediateDirectories: true)
+        NSWorkspace.shared.activateFileViewerSelecting([AppDebugLogStore.shared.logFileURL])
+    }
 }
 
-private struct SettingsSection<Content: View>: View {
+struct SettingsSection<Content: View>: View {
     let title: String
     let subtitle: String
     @ViewBuilder var content: () -> Content
@@ -124,6 +152,7 @@ private struct SettingSlider: View {
     let range: ClosedRange<Double>
     let previewKind: IslandLayoutSettings.PreviewKind
     let suffix: String
+    @State private var isEditing = false
 
     init(
         _ title: String,
@@ -149,6 +178,7 @@ private struct SettingSlider: View {
                 in: range,
                 step: 1,
                 onEditingChanged: { editing in
+                    isEditing = editing
                     IslandLayoutSettings.notifyChanged(previewKind: editing ? previewKind : nil)
                 }
             )
@@ -159,7 +189,11 @@ private struct SettingSlider: View {
                 .frame(width: 64, alignment: .trailing)
         }
         .onChange(of: value) { _, _ in
-            IslandLayoutSettings.notifyChanged(previewKind: previewKind)
+            if isEditing {
+                IslandLayoutSettings.notifyChanged(previewKind: previewKind)
+            } else {
+                IslandLayoutSettings.notifyLayoutChanged()
+            }
         }
     }
 }

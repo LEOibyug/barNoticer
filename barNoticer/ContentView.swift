@@ -49,6 +49,9 @@ struct ContentView: View {
             case .islandSettings:
                 IslandSettingsView()
                     .frame(minWidth: 560, minHeight: 440)
+            case .aiSettings:
+                AISettingsView()
+                    .frame(minWidth: 560, minHeight: 440)
             }
         }
     }
@@ -67,6 +70,8 @@ struct ContentView: View {
             Section("偏好") {
                 Label("岛设置", systemImage: "slider.horizontal.3")
                     .tag(SidebarSelection.islandSettings)
+                Label("AI 设置", systemImage: "sparkles")
+                    .tag(SidebarSelection.aiSettings)
             }
         }
         .navigationTitle("barNoticer")
@@ -181,5 +186,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: TodoItem.self, inMemory: true)
+        .modelContainer(for: [TodoItem.self, DailySummary.self], inMemory: true)
 }
