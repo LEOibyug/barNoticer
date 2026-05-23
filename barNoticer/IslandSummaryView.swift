@@ -20,9 +20,14 @@ struct IslandSummaryView: View {
     @State private var quickAddDraft = IslandQuickAddDraft()
     @State private var layoutVersion = 0
     @AppStorage(IslandDisplayMode.storageKey) private var modeRawValue = IslandDisplayMode.standard.rawValue
+    @AppStorage(IslandGroupingMode.storageKey) private var groupingModeRawValue = IslandGroupingMode.defaultMode.rawValue
 
     private var mode: IslandDisplayMode {
         IslandDisplayMode(rawValue: modeRawValue) ?? .standard
+    }
+
+    private var groupingMode: IslandGroupingMode {
+        IslandGroupingMode(rawValue: groupingModeRawValue) ?? .defaultMode
     }
 
     private var layoutSettings: IslandLayoutSettings {
@@ -39,7 +44,11 @@ struct IslandSummaryView: View {
     }
 
     private var visibleDisplayGroups: [TodoDisplayGroup] {
-        TodoSorter.displayGroups(items: Array(activeItems.prefix(6)), groups: groups)
+        TodoSorter.displayGroups(items: IslandStandardTodoPolicy.items(from: activeItems), groups: groups)
+    }
+
+    private var visiblePriorityGroups: [TodoPriorityGroup] {
+        TodoSorter.priorityGroups(IslandStandardTodoPolicy.items(from: activeItems))
     }
 
     private var topBridgeHeight: CGFloat {
@@ -105,6 +114,7 @@ struct IslandSummaryView: View {
 
             Spacer()
 
+            groupingToggle
             modeToggle
 
             if let first = activeItems.first {
@@ -121,7 +131,9 @@ struct IslandSummaryView: View {
 
     private var modeToggle: some View {
         Button {
-            modeRawValue = mode == .standard ? IslandDisplayMode.wide.rawValue : IslandDisplayMode.standard.rawValue
+            withAnimation(.smooth(duration: IslandAnimationTimings.modeSwitchDuration)) {
+                modeRawValue = mode == .standard ? IslandDisplayMode.wide.rawValue : IslandDisplayMode.standard.rawValue
+            }
             IslandLayoutSettings.notifyLayoutChanged()
         } label: {
             Image(systemName: mode.systemImage)
@@ -132,6 +144,22 @@ struct IslandSummaryView: View {
         .foregroundStyle(.white.opacity(0.82))
         .background(.white.opacity(0.1), in: Circle())
         .help(mode == .standard ? "切换到宽体模式" : "切换到普通模式")
+    }
+
+    private var groupingToggle: some View {
+        Button {
+            withAnimation(.smooth(duration: IslandAnimationTimings.modeSwitchDuration)) {
+                groupingModeRawValue = groupingMode == .priority ? IslandGroupingMode.group.rawValue : IslandGroupingMode.priority.rawValue
+            }
+        } label: {
+            Image(systemName: groupingMode.systemImage)
+                .font(.caption.weight(.semibold))
+                .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white.opacity(0.82))
+        .background(.white.opacity(0.1), in: Circle())
+        .help(groupingMode == .priority ? "按分类分组" : "按重要性分组")
     }
 
     private var quickAdd: some View {
@@ -235,16 +263,31 @@ struct IslandSummaryView: View {
 
     private var standardTodoContent: some View {
         Group {
-            if visibleDisplayGroups.isEmpty {
+            if activeItems.isEmpty {
                 emptyState
             } else {
                 ScrollView(.vertical) {
-                    VStack(spacing: 8) {
-                        ForEach(visibleDisplayGroups) { displayGroup in
-                            IslandDisplayGroupSection(displayGroup: displayGroup, groups: groups)
+                    Group {
+                        if groupingMode == .priority {
+                            VStack(spacing: 8) {
+                                ForEach(visiblePriorityGroups) { priorityGroup in
+                                    IslandPrioritySection(priority: priorityGroup.priority, items: priorityGroup.items, groups: groups)
+                                }
+                            }
+                        } else {
+                            VStack(spacing: 8) {
+                                ForEach(visibleDisplayGroups) { displayGroup in
+                                    IslandDisplayGroupSection(displayGroup: displayGroup, groups: groups)
+                                }
+                            }
                         }
                     }
                     .padding(.vertical, 1)
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .move(edge: .trailing)),
+                        removal: .opacity.combined(with: .move(edge: .leading))
+                    ))
+                    .id(groupingMode)
                 }
                 .scrollIndicators(.never)
             }
@@ -252,9 +295,37 @@ struct IslandSummaryView: View {
     }
 
     private var wideTodoContent: some View {
-        HStack(alignment: .top, spacing: 10) {
-            ForEach(TodoPriority.allCases) { priority in
-                IslandPriorityColumn(priority: priority, items: wideItems(for: priority), groups: groups)
+        Group {
+            if activeItems.isEmpty {
+                emptyState
+            } else if groupingMode == .priority {
+                HStack(alignment: .top, spacing: 10) {
+                    ForEach(TodoPriority.allCases) { priority in
+                        IslandPriorityColumn(priority: priority, items: wideItems(for: priority), groups: groups)
+                    }
+                }
+                .transition(.asymmetric(
+                    insertion: .opacity.combined(with: .move(edge: .trailing)),
+                    removal: .opacity.combined(with: .move(edge: .leading))
+                ))
+                .id(groupingMode)
+            } else {
+                ScrollView(.horizontal) {
+                    HStack(alignment: .top, spacing: 10) {
+                        ForEach(visibleDisplayGroups) { displayGroup in
+                            IslandDisplayGroupColumn(displayGroup: displayGroup, groups: groups)
+                                .frame(width: IslandWideGroupLayoutPolicy.columnWidth)
+                        }
+                    }
+                    .padding(.horizontal, 1)
+                    .frame(maxWidth: IslandWideGroupLayoutPolicy.needsHorizontalScroll(groupCount: visibleDisplayGroups.count) ? nil : .infinity, alignment: .leading)
+                }
+                .scrollIndicators(.never)
+                .transition(.asymmetric(
+                    insertion: .opacity.combined(with: .move(edge: .trailing)),
+                    removal: .opacity.combined(with: .move(edge: .leading))
+                ))
+                .id(groupingMode)
             }
         }
     }
@@ -282,11 +353,7 @@ struct IslandSummaryView: View {
     }
 
     private var footerText: String? {
-        if mode == .wide {
-            return nil
-        }
-
-        return activeItems.count > 6 ? "还有 \(activeItems.count - 6) 项未显示" : "顶部中央悬停可快速查看"
+        "顶部中央悬停可快速查看"
     }
 
     private var trimmedDraftTitle: String {
@@ -314,6 +381,38 @@ struct IslandSummaryView: View {
 enum IslandWideTodoPolicy {
     static func items(for priority: TodoPriority, from items: [TodoItem]) -> [TodoItem] {
         items.filter { $0.priority == priority }
+    }
+}
+
+enum IslandStandardTodoPolicy {
+    static func items(from items: [TodoItem]) -> [TodoItem] {
+        items
+    }
+}
+
+enum IslandGroupingMode: String, CaseIterable, Identifiable {
+    case priority
+    case group
+
+    static let storageKey = "island.groupingMode"
+    static let defaultMode = Self.priority
+
+    var id: String { rawValue }
+
+    var systemImage: String {
+        switch self {
+        case .priority: "exclamationmark.3"
+        case .group: "folder"
+        }
+    }
+}
+
+enum IslandWideGroupLayoutPolicy {
+    static let maxVisibleColumns = 3
+    static let columnWidth: CGFloat = 238
+
+    static func needsHorizontalScroll(groupCount: Int) -> Bool {
+        groupCount > maxVisibleColumns
     }
 }
 
@@ -372,6 +471,53 @@ private struct IslandPriorityColumn: View {
     }
 }
 
+private struct IslandPrioritySection: View {
+    let priority: TodoPriority
+    let items: [TodoItem]
+    let groups: [TodoGroup]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 7) {
+                Image(systemName: priority.systemImage)
+                    .font(.caption.weight(.semibold))
+
+                Text("\(priority.title)重要性")
+                    .font(.caption.weight(.semibold))
+
+                Text("\(items.count)")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.black.opacity(0.82))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(priority.islandColor, in: Capsule())
+
+                Spacer(minLength: 8)
+            }
+            .foregroundStyle(priority.islandColor)
+
+            IslandTodoLineList(items: items, groups: groups)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(.white.opacity(IslandSummaryStyle.itemBackgroundOpacity), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .stroke(priority.islandColor.opacity(0.22), lineWidth: 1)
+        }
+    }
+}
+
+private struct IslandDisplayGroupColumn: View {
+    let displayGroup: TodoDisplayGroup
+    let groups: [TodoGroup]
+
+    var body: some View {
+        IslandDisplayGroupSection(displayGroup: displayGroup, groups: groups)
+            .frame(maxHeight: .infinity, alignment: .top)
+    }
+}
+
 private struct IslandDisplayGroupSection: View {
     let displayGroup: TodoDisplayGroup
     let groups: [TodoGroup]
@@ -397,17 +543,7 @@ private struct IslandDisplayGroupSection: View {
             }
             .foregroundStyle(displayGroup.group.color)
 
-            VStack(spacing: 0) {
-                ForEach(Array(displayGroup.items.enumerated()), id: \.element.id) { index, item in
-                    IslandTodoLine(item: item, groups: groups)
-
-                    if index < displayGroup.items.count - 1 {
-                        Divider()
-                            .overlay(.white.opacity(IslandSummaryStyle.dividerOpacity))
-                            .padding(.leading, 29)
-                    }
-                }
-            }
+            IslandTodoLineList(items: displayGroup.items, groups: groups)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
@@ -415,6 +551,25 @@ private struct IslandDisplayGroupSection: View {
         .overlay {
             RoundedRectangle(cornerRadius: 13, style: .continuous)
                 .stroke(displayGroup.group.color.opacity(0.26), lineWidth: 1)
+        }
+    }
+}
+
+private struct IslandTodoLineList: View {
+    let items: [TodoItem]
+    let groups: [TodoGroup]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                IslandTodoLine(item: item, groups: groups)
+
+                if index < items.count - 1 {
+                    Divider()
+                        .overlay(.white.opacity(IslandSummaryStyle.dividerOpacity))
+                        .padding(.leading, 29)
+                }
+            }
         }
     }
 }

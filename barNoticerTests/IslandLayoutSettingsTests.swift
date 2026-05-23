@@ -150,4 +150,27 @@ final class IslandLayoutSettingsTests: XCTestCase {
         XCTAssertEqual(visible.count, 10)
         XCTAssertEqual(visible.map(\.title), (0..<10).map { "High \($0)" })
     }
+
+    func testStandardModeShowsAllActiveItemsInsteadOfTruncating() {
+        let items = (0..<8).map { index in
+            TodoItem(title: "Item \(index)", priority: .medium)
+        }
+
+        let visible = IslandStandardTodoPolicy.items(from: items)
+
+        XCTAssertEqual(visible.count, 8)
+        XCTAssertEqual(visible.map(\.title), (0..<8).map { "Item \($0)" })
+    }
+
+    func testGroupingModeDefaultsToPriorityAndPersistsByRawValue() {
+        XCTAssertEqual(IslandGroupingMode(rawValue: "priority"), .priority)
+        XCTAssertEqual(IslandGroupingMode(rawValue: "group"), .group)
+        XCTAssertEqual(IslandGroupingMode.defaultMode, .priority)
+        XCTAssertEqual(IslandGroupingMode.storageKey, "island.groupingMode")
+    }
+
+    func testWideGroupLayoutScrollsHorizontallyOnlyAfterThreeGroups() {
+        XCTAssertFalse(IslandWideGroupLayoutPolicy.needsHorizontalScroll(groupCount: 3))
+        XCTAssertTrue(IslandWideGroupLayoutPolicy.needsHorizontalScroll(groupCount: 4))
+    }
 }
