@@ -6,8 +6,19 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		B831C1E22FC18318004BD76C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B831C1C22FC18317004BD76C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B831C1C92FC18317004BD76C;
+			remoteInfo = barNoticer;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		B831C1CA2FC18317004BD76C /* barNoticer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = barNoticer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B831C1DA2FC18318004BD76C /* barNoticerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = barNoticerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -16,10 +27,22 @@
 			path = barNoticer;
 			sourceTree = "<group>";
 		};
+		B831C1DC2FC18318004BD76C /* barNoticerTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = barNoticerTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		B831C1C72FC18317004BD76C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B831C1DD2FC18318004BD76C /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -33,6 +56,7 @@
 			isa = PBXGroup;
 			children = (
 				B831C1CC2FC18317004BD76C /* barNoticer */,
+				B831C1DC2FC18318004BD76C /* barNoticerTests */,
 				B831C1CB2FC18317004BD76C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +65,7 @@
 			isa = PBXGroup;
 			children = (
 				B831C1CA2FC18317004BD76C /* barNoticer.app */,
+				B831C1DA2FC18318004BD76C /* barNoticerTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -70,6 +95,29 @@
 			productReference = B831C1CA2FC18317004BD76C /* barNoticer.app */;
 			productType = "com.apple.product-type.application";
 		};
+		B831C1DE2FC18318004BD76C /* barNoticerTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B831C1E52FC18318004BD76C /* Build configuration list for PBXNativeTarget "barNoticerTests" */;
+			buildPhases = (
+				B831C1DF2FC18318004BD76C /* Sources */,
+				B831C1DD2FC18318004BD76C /* Frameworks */,
+				B831C1E02FC18318004BD76C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B831C1E12FC18318004BD76C /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				B831C1DC2FC18318004BD76C /* barNoticerTests */,
+			);
+			name = barNoticerTests;
+			packageProductDependencies = (
+			);
+			productName = barNoticerTests;
+			productReference = B831C1DA2FC18318004BD76C /* barNoticerTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -82,6 +130,10 @@
 				TargetAttributes = {
 					B831C1C92FC18317004BD76C = {
 						CreatedOnToolsVersion = 26.5;
+					};
+					B831C1DE2FC18318004BD76C = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = B831C1C92FC18317004BD76C;
 					};
 				};
 			};
@@ -100,12 +152,20 @@
 			projectRoot = "";
 			targets = (
 				B831C1C92FC18317004BD76C /* barNoticer */,
+				B831C1DE2FC18318004BD76C /* barNoticerTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		B831C1C82FC18317004BD76C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B831C1E02FC18318004BD76C /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -122,7 +182,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B831C1DF2FC18318004BD76C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B831C1E12FC18318004BD76C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B831C1C92FC18317004BD76C /* barNoticer */;
+			targetProxy = B831C1E22FC18318004BD76C /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		B831C1D32FC18318004BD76C /* Debug */ = {
@@ -303,6 +378,56 @@
 			};
 			name = Release;
 		};
+		B831C1E32FC18318004BD76C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.LEOibyug.barNoticerTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/barNoticer.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/barNoticer";
+			};
+			name = Debug;
+		};
+		B831C1E42FC18318004BD76C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.LEOibyug.barNoticerTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/barNoticer.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/barNoticer";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -320,6 +445,15 @@
 			buildConfigurations = (
 				B831C1D62FC18318004BD76C /* Debug */,
 				B831C1D72FC18318004BD76C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B831C1E52FC18318004BD76C /* Build configuration list for PBXNativeTarget "barNoticerTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B831C1E32FC18318004BD76C /* Debug */,
+				B831C1E42FC18318004BD76C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
