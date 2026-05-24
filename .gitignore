@@ -1,5 +1,50 @@
-build/
-DerivedData/
-*.xcuserstate
-*.xcuserdata/
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# Xcode user state
 xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# Xcode build output
+DerivedData/
+build/
+Build/
+*.moved-aside
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+Packages/
+Package.resolved
+.swiftpm/
+
+# App packaging artifacts
+*.app
+*.xcarchive
+*.pkg
+*.dmg
+*.zip
+
+# Logs and local runtime data
+*.log
+Logs/
+
+# Editor and tooling
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local secrets and environment
+.env
+.env.*
+*.pem
+*.p12
+*.mobileprovision
+*.provisionprofile
