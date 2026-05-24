@@ -5,8 +5,6 @@
 Icon?
 
 # Xcode user state
-*.xcodeproj/
-*.xcworkspace/
 xcuserdata/
 *.xcuserstate
 *.xcscmblueprint
@@ -25,9 +23,6 @@ Build/
 Packages/
 Package.resolved
 .swiftpm/
-
-# Local project scaffolding and tests
-barNoticerTests/
 
 # App packaging artifacts
 *.app
