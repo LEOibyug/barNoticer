@@ -1,73 +1,77 @@
 # barNoticer
 
-barNoticer is a lightweight macOS todo companion that lives around the camera notch. It turns the unused top-center screen area into a small “dynamic island” for quick task capture, review, and completion.
+barNoticer 是一个轻量的 macOS 待办工具。它利用 MacBook 屏幕顶部摄像头刘海附近的空白区域，把待办事项、快速输入和 AI 辅助整理做成一个类似“灵动岛”的常驻入口。
 
-The app is designed for Apple Silicon Macs with a notch. It stays out of the Dock by default, opens a compact island when your pointer reaches the top hot zone, and keeps a conventional management window for settings and deeper edits.
+这个项目主要面向带刘海的 Apple Silicon Mac。应用默认不常驻 Dock，当鼠标移动到顶部热区时，岛会从刘海位置自然展开；需要更完整的管理能力时，可以打开主面板进行编辑和设置。
 
-> This branch keeps the repository source-focused. If you want to clone and build the app directly with Xcode, use the `xcode-project` branch.
+## 功能特性
 
-## Highlights
+- 从屏幕顶部刘海区域展开的待办岛面板。
+- 支持窄体和宽体两种岛模式。
+- 支持按重要性分组，也支持按自定义分组展示。
+- 岛内可快速新增、完成事项。
+- 事项支持重要性、完成状态、自定义分组和可选截止时间。
+- 带截止时间的事项会显示剩余时间。
+- 可在设置中手动调整唤起热区和展开区域位置。
+- 支持 OpenAI 兼容格式的 AI 接口。
+- 支持全局快捷键唤起类似 Spotlight 的 AI 输入框。
+- 可设置 AI 操作是否需要用户确认。
+- 本地保存调试日志，包含 AI 请求、回复和应用事件。
+- 支持开机自启开关。
 
-- Notch island panel that expands naturally from the top hot zone.
-- Standard and wide island layouts.
-- Priority-based and custom-group-based task views.
-- Quick add from inside the island.
-- Task priority, completion state, custom groups, and optional deadlines.
-- Remaining-time display for tasks with deadlines.
-- Adjustable hot zone and expanded panel position.
-- AI assistant with OpenAI-compatible Chat Completions APIs.
-- Global shortcut for a Spotlight-like AI input panel.
-- Optional confirmation before AI applies task operations.
-- Local debug logs for AI requests, responses, and app events.
-- Launch-at-login setting.
+## 使用方式
 
-## Screens and Workflow
+barNoticer 主要由两个界面组成：
 
-The main workflow has two surfaces:
+- 岛面板：用于快速查看、创建、完成事项，适合高频轻量操作。
+- 主面板：用于完整管理事项、分组、AI 设置、岛位置设置和应用偏好。
 
-- Island panel: fast capture and review near the macOS notch.
-- Main window: full task management, groups, AI settings, island layout settings, and app preferences.
+岛面板可以按重要性或自定义分组展示事项。宽体模式会横向展示更多内容；当分组数量超过可显示范围时，宽体分组视图支持横向滚动。
 
-The island can display tasks by priority or by custom group. In wide mode it uses the extra horizontal space to show multiple columns, and group mode can scroll horizontally when there are more than three groups.
+## AI 助手
 
-## AI Assistant
+barNoticer 的 AI 能力使用 OpenAI 兼容的 Chat Completions 接口。用户可以在设置中配置：
 
-barNoticer can connect to OpenAI-compatible APIs. Users configure:
+- API Base URL
+- 模型名称
+- API Key
+- 全局快捷键
+- AI 执行操作前是否需要确认
 
-- Base URL
-- model name
-- API key
-- global shortcut
-- whether AI actions need manual confirmation
+AI 助手只围绕待办管理工作：总结未完成事项、总结已完成事项、分析完成习惯、给出任务建议、创建事项、修改事项、完成事项、删除事项、管理分组，以及保存每日总结。
 
-The assistant receives structured task context only from the local app: active tasks, completed tasks, groups, deadlines, creation times, daily summaries, current date, and timezone. It can propose or apply operations such as creating tasks, updating metadata, completing tasks, deleting tasks, creating groups, and saving daily summaries.
+应用会把本地结构化上下文提供给 AI，包括未完成事项、已完成事项、分组、截止时间、创建时间、每日总结、当前日期和时区。这样用户使用“今天”“明天”“下周三”等相对日期时，模型可以根据当前上下文理解。
 
-API keys are stored locally in app defaults, not committed to this repository.
+API Key 只保存在本机应用配置中，不会提交到仓库。
 
-## Repository Layout
+## 仓库结构
 
 ```text
 barNoticer/
-  App, views, models, controllers, AI client, island logic, and assets
+  应用入口、SwiftUI 视图、SwiftData 模型、控制器、AI 客户端、岛逻辑和资源文件
+barNoticer.xcodeproj/
+  Xcode 工程文件
+barNoticerTests/
+  单元测试
 README.md
 .gitignore
 ```
 
-The `main` branch intentionally excludes local Xcode project scaffolding and tests so the repository reads cleanly as source code. Build scaffolding is available on the `xcode-project` branch.
+仓库包含从源码构建所需的 Xcode 工程和测试文件。`xcuserdata`、DerivedData、构建产物、运行日志和本机配置不会提交。
 
-## Build From Source
+## 从源码构建
 
-For a directly buildable checkout:
+克隆仓库后可以直接用 Xcode 打开：
 
 ```bash
-git clone -b xcode-project git@github.com:LEOibyug/barNoticer.git
+git clone git@github.com:LEOibyug/barNoticer.git
 cd barNoticer
 open barNoticer.xcodeproj
 ```
 
-Then select the `barNoticer` scheme in Xcode and run it.
+在 Xcode 中选择 `barNoticer` scheme，然后运行即可。
 
-Command-line Release build:
+也可以使用命令行构建 Release 版本：
 
 ```bash
 xcodebuild build \
@@ -78,47 +82,52 @@ xcodebuild build \
   -derivedDataPath /private/tmp/barNoticerRelease
 ```
 
-Install the local build:
+安装到本机：
 
 ```bash
 ditto /private/tmp/barNoticerRelease/Build/Products/Release/barNoticer.app /Applications/barNoticer.app
 open /Applications/barNoticer.app
 ```
 
-Local builds use Xcode's local/ad-hoc signing by default. For public distribution, configure Developer ID signing, Hardened Runtime, and notarization.
+本地构建默认使用 Xcode 的本地签名。若要公开分发，需要自行配置 Developer ID 签名、Hardened Runtime 和 notarization。
 
-## Requirements
+## 运行测试
+
+```bash
+xcodebuild test \
+  -project barNoticer.xcodeproj \
+  -scheme barNoticer \
+  -destination 'platform=macOS' \
+  -derivedDataPath /private/tmp/barNoticerTests
+```
+
+## 环境要求
 
 - macOS
 - Apple Silicon Mac
-- Xcode with a recent macOS SDK
-- SwiftUI and SwiftData support
+- 带较新 macOS SDK 的 Xcode
+- SwiftUI 与 SwiftData 支持
 
-## Logs
+## 日志
 
-The app writes lightweight local logs for debugging. The log location is shown in the app's island settings page and typically resolves inside the app container:
+应用会维护轻量级本地日志，便于调试 AI 请求、回复和窗口行为。日志位置可在应用设置中查看，通常位于应用容器内：
 
 ```text
 ~/Library/Containers/com.LEOibyug.barNoticer/Data/Library/Application Support/barNoticer/Logs/barNoticer.log
 ```
 
-Runtime logs and user configuration are local data and are not part of this repository.
+运行日志、用户配置、API Key 和本机数据都不会作为仓库内容提交。
 
-## Data Model
+## 数据模型
 
-barNoticer uses SwiftData models:
+barNoticer 使用 SwiftData 保存数据，核心模型包括：
 
 - `TodoItem`
 - `TodoGroup`
 - `DailySummary`
 
-The built-in default group is named `默认分组` and cannot be deleted. Deleting a custom group moves its tasks back to the default group.
+内置默认分组名为 `默认分组`，不能删除。删除自定义分组时，该分组下的事项会回到默认分组。
 
-## Branches
+## 项目状态
 
-- `main`: source-focused branch for browsing and documentation.
-- `xcode-project`: buildable branch with Xcode project files and tests.
-
-## Status
-
-This is an experimental personal macOS utility. The core app is usable locally, but distribution packaging, notarization, and broader device compatibility are still intentionally lightweight.
+这是一个个人实验性质的 macOS 工具。核心功能已经可以本机使用，但公开分发、正式签名、公证和更广泛设备兼容仍保持轻量处理。
