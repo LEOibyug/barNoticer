@@ -17,6 +17,18 @@ barNoticer 是一个面向 macOS Apple Silicon 的轻量待办应用。它利用
 - 调试日志：应用维护自己的日志文件，便于排查 AI 对话和运行问题。
 - 开机自启：应用设置中提供登录启动开关。
 
+## 仓库内容
+
+这个仓库刻意只保留应用源码、资源和说明文档，不提交本机 Xcode 工程文件与测试目录。这样仓库更接近开源软件源码浏览形态，避免混入个人本地工程状态、签名配置、测试夹具和 IDE 元数据。
+
+当前公开内容主要包括：
+
+- `barNoticer/`：应用源码与资源。
+- `README.md`：功能、运行方式和维护说明。
+- `.gitignore`：本地工程、构建产物、日志与密钥忽略规则。
+
+维护者本机可以保留 `barNoticer.xcodeproj` 和 `barNoticerTests/` 用于开发、编译和验证；它们不属于公开仓库内容。
+
 ## 系统要求
 
 - macOS
@@ -24,15 +36,9 @@ barNoticer 是一个面向 macOS Apple Silicon 的轻量待办应用。它利用
 - Xcode 26.5 SDK 或兼容的本机 Xcode 环境
 - SwiftUI / SwiftData 支持
 
-当前项目使用 Xcode 工程：
+## 本地开发说明
 
-```bash
-barNoticer.xcodeproj
-```
-
-## 本地运行
-
-使用 Xcode 打开项目：
+如果你是仓库维护者，并且本机保留了 Xcode 工程文件，可以使用：
 
 ```bash
 open barNoticer.xcodeproj
@@ -40,7 +46,7 @@ open barNoticer.xcodeproj
 
 选择 `barNoticer` scheme，然后运行。
 
-也可以用命令行构建：
+命令行 Debug 构建：
 
 ```bash
 xcodebuild build \
@@ -51,6 +57,8 @@ xcodebuild build \
 ```
 
 ## Release 构建与本机安装
+
+以下命令要求本机存在未提交到仓库的 `barNoticer.xcodeproj`：
 
 生成 Release 版本：
 
@@ -108,7 +116,7 @@ AI 会收到当前日期、时区、待办事项、分组、DDL 和完成情况�
 
 ## 测试
 
-运行完整测试：
+测试目录不纳入公开仓库。维护者本机保留 `barNoticerTests/` 时，可以运行：
 
 ```bash
 xcodebuild test \
