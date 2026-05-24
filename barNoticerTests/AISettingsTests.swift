@@ -22,7 +22,7 @@ final class AISettingsTests: XCTestCase {
 
         draft.baseURLText = "https://example.com/v1"
         draft.model = "custom-model"
-        draft.apiKey = "sk-auto"
+        draft.apiKey = "test-api-key-auto"
         draft.shortcut = AIKeyboardShortcut(keyCode: 0, modifiers: [.command, .option])
         draft.requiresActionConfirmation = false
 
@@ -31,7 +31,7 @@ final class AISettingsTests: XCTestCase {
         XCTAssertEqual(settings.model, "custom-model")
         XCTAssertEqual(settings.shortcut, AIKeyboardShortcut(keyCode: 0, modifiers: [.command, .option]))
         XCTAssertFalse(settings.requiresActionConfirmation)
-        XCTAssertEqual(keyStore.readAPIKey(), "sk-auto")
+        XCTAssertEqual(keyStore.readAPIKey(), "test-api-key-auto")
     }
 
     func testDefaultSettingsUseOpenAICompatibleChatCompletions() {
@@ -105,10 +105,10 @@ final class AISettingsTests: XCTestCase {
 
         XCTAssertEqual(store.readAPIKey(), "")
 
-        store.saveAPIKey("sk-local")
+        store.saveAPIKey("test-api-key-local")
 
-        XCTAssertEqual(store.readAPIKey(), "sk-local")
-        XCTAssertEqual(defaults.string(forKey: AIAPIKeyStore.apiKeyKey), "sk-local")
+        XCTAssertEqual(store.readAPIKey(), "test-api-key-local")
+        XCTAssertEqual(defaults.string(forKey: AIAPIKeyStore.apiKeyKey), "test-api-key-local")
     }
 
     func testChatRequestPreservesAssistantReasoningContent() throws {

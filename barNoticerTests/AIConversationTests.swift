@@ -217,7 +217,7 @@ final class AIConversationTests: XCTestCase {
         }
         AISettings(baseURL: URL(string: "https://example.com/v1")!, model: "model").save(to: defaults)
         let keyStore = AIAPIKeyStore(defaults: defaults)
-        keyStore.saveAPIKey("sk-test")
+        keyStore.saveAPIKey("test-api-key")
 
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("AIConversationLogTests-\(UUID().uuidString)")
@@ -264,7 +264,7 @@ final class AIConversationTests: XCTestCase {
         }
         AISettings(baseURL: URL(string: "https://example.com/v1")!, model: "model").save(to: defaults)
         let keyStore = AIAPIKeyStore(defaults: defaults)
-        keyStore.saveAPIKey("sk-test")
+        keyStore.saveAPIKey("test-api-key")
 
         let container = try ModelContainer(
             for: TodoItem.self, TodoGroup.self, DailySummary.self,
