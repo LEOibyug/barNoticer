@@ -9,6 +9,11 @@ struct TodoRow: View {
     @State private var editedTitle = ""
     @State private var hasDeadline = false
     @State private var editedDeadline = Date().addingTimeInterval(3_600)
+    @State private var editedScheduleKind = TodoScheduleKind.none
+    @State private var firstScheduledTime = Date().addingTimeInterval(3_600)
+    @State private var secondScheduledTime = Date().addingTimeInterval(7_200)
+    @State private var recurrenceRule = TodoRecurrenceRule.daily
+    @State private var recurrenceAnchor = Date().addingTimeInterval(3_600)
     @FocusState private var isTitleFocused: Bool
 
     var body: some View {
@@ -20,21 +25,25 @@ struct TodoRow: View {
             }
             groupPicker
             priorityPicker
-            deadlineEditor
+            scheduleEditor
             deleteButton
         }
         .padding(.vertical, 6)
         .onAppear {
             syncDeadlineState()
         }
-        .onChange(of: item.deadlineAt) { _, _ in
+        .onChange(of: item.updatedAt) { _, _ in
             syncDeadlineState()
         }
     }
 
     private var completionButton: some View {
         Button {
-            item.updateCompletion(!item.isCompleted)
+            if item.scheduleKind == .recurring, !item.isCompleted {
+                item.completeCurrentOccurrence()
+            } else {
+                item.updateCompletion(!item.isCompleted)
+            }
         } label: {
             Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 18))
@@ -89,29 +98,80 @@ struct TodoRow: View {
         .frame(width: 104)
     }
 
-    private var deadlineEditor: some View {
+    private var scheduleEditor: some View {
         HStack(spacing: 6) {
-            Toggle("", isOn: Binding(
-                get: { hasDeadline },
-                set: { enabled in
-                    hasDeadline = enabled
-                    item.updateDeadline(enabled ? editedDeadline : nil)
+            Picker("时间", selection: Binding(
+                get: { editedScheduleKind },
+                set: { kind in
+                    editedScheduleKind = kind
+                    applyScheduleEditor()
                 }
-            ))
-            .labelsHidden()
-            .toggleStyle(.checkbox)
-            .help("设置截止时间")
+            )) {
+                Text("无时间").tag(TodoScheduleKind.none)
+                Text("DDL").tag(TodoScheduleKind.singleDeadline)
+                Text("多时间").tag(TodoScheduleKind.multipleTimes)
+                Text("重复").tag(TodoScheduleKind.recurring)
+            }
+            .pickerStyle(.menu)
+            .frame(width: 86)
 
-            if hasDeadline {
+            switch editedScheduleKind {
+            case .none:
+                EmptyView()
+            case .singleDeadline:
                 DatePicker("", selection: Binding(
                     get: { editedDeadline },
                     set: { date in
                         editedDeadline = date
-                        item.updateDeadline(date)
+                        applyScheduleEditor()
                     }
                 ), displayedComponents: [.date, .hourAndMinute])
                 .labelsHidden()
                 .frame(width: 156)
+            case .multipleTimes:
+                DatePicker("", selection: Binding(
+                    get: { firstScheduledTime },
+                    set: { date in
+                        firstScheduledTime = date
+                        applyScheduleEditor()
+                    }
+                ), displayedComponents: [.date, .hourAndMinute])
+                .labelsHidden()
+                .frame(width: 132)
+
+                DatePicker("", selection: Binding(
+                    get: { secondScheduledTime },
+                    set: { date in
+                        secondScheduledTime = date
+                        applyScheduleEditor()
+                    }
+                ), displayedComponents: [.date, .hourAndMinute])
+                .labelsHidden()
+                .frame(width: 132)
+            case .recurring:
+                Picker("重复", selection: Binding(
+                    get: { recurrenceRule },
+                    set: { rule in
+                        recurrenceRule = rule
+                        applyScheduleEditor()
+                    }
+                )) {
+                    ForEach(TodoRecurrenceRule.allCases) { rule in
+                        Text(rule.title).tag(rule)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 76)
+
+                DatePicker("", selection: Binding(
+                    get: { recurrenceAnchor },
+                    set: { date in
+                        recurrenceAnchor = date
+                        applyScheduleEditor()
+                    }
+                ), displayedComponents: [.date, .hourAndMinute])
+                .labelsHidden()
+                .frame(width: 132)
             }
         }
     }
@@ -120,9 +180,9 @@ struct TodoRow: View {
         HStack(spacing: 8) {
             Text(TodoAgeFormatter.elapsedText(since: item.createdAt))
             Text(TodoGroupResolver.group(for: item, groups: groups).name)
-            if let deadlineAt = item.deadlineAt {
-                Text(TodoDeadlineFormatter.cardText(for: deadlineAt))
-                    .foregroundStyle(deadlineAt < Date() ? .red : .secondary)
+            if let occurrence = item.nextOccurrence(), let scheduleText = TodoDeadlineFormatter.cardText(for: item) {
+                Text(scheduleText)
+                    .foregroundStyle(occurrence < Date() ? .red : .secondary)
             }
         }
         .font(.caption)
@@ -153,11 +213,33 @@ struct TodoRow: View {
     }
 
     private func syncDeadlineState() {
-        if let deadlineAt = item.deadlineAt {
-            hasDeadline = true
+        editedScheduleKind = item.scheduleKind
+        hasDeadline = item.hasSchedule
+        if let deadlineAt = item.deadlineAt ?? item.nextOccurrence() {
             editedDeadline = deadlineAt
-        } else {
-            hasDeadline = false
+        }
+        if let first = item.scheduledTimes.first {
+            firstScheduledTime = first
+        }
+        if item.scheduledTimes.count > 1 {
+            secondScheduledTime = item.scheduledTimes[1]
+        } else if let first = item.scheduledTimes.first {
+            secondScheduledTime = first.addingTimeInterval(3_600)
+        }
+        recurrenceRule = item.recurrenceRule ?? .daily
+        recurrenceAnchor = item.recurrenceAnchor ?? item.nextOccurrence() ?? Date().addingTimeInterval(3_600)
+    }
+
+    private func applyScheduleEditor() {
+        switch editedScheduleKind {
+        case .none:
+            item.clearSchedule()
+        case .singleDeadline:
+            item.updateSchedule(deadlineAt: editedDeadline)
+        case .multipleTimes:
+            item.updateSchedule(scheduledTimes: [firstScheduledTime, secondScheduledTime])
+        case .recurring:
+            item.updateSchedule(recurrenceRule: recurrenceRule, recurrenceAnchor: recurrenceAnchor)
         }
     }
 }

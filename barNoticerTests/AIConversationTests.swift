@@ -194,7 +194,22 @@ final class AIConversationTests: XCTestCase {
         XCTAssertTrue(context.contains("高重要性"))
         XCTAssertTrue(context.contains("group=工作"))
         XCTAssertTrue(context.contains("deadlineAt="))
+        XCTAssertTrue(context.contains("scheduleKind="))
+        XCTAssertTrue(context.contains("nextOccurrenceAt="))
         XCTAssertTrue(context.contains("[[todo:<UUID>]]"))
+    }
+
+    func testInlineTodoContextIncludesRecurringScheduleFields() {
+        let anchor = Date(timeIntervalSince1970: 1_700_000_000)
+        let item = TodoItem(title: "每日复盘", priority: .medium, recurrenceRule: .daily, recurrenceAnchor: anchor)
+        let snapshot = AITodoContext.snapshot(items: [item], groups: [], now: anchor.addingTimeInterval(60))
+
+        let context = snapshot.inlineContext(now: anchor.addingTimeInterval(60)).content
+
+        XCTAssertTrue(context.contains("scheduleKind=recurring"))
+        XCTAssertTrue(context.contains("recurrenceRule=daily"))
+        XCTAssertTrue(context.contains("recurrenceAnchor="))
+        XCTAssertTrue(context.contains("nextOccurrenceAt="))
     }
 
     func testInlineTodoContextContainsCurrentDateAndTimezoneForRelativeDates() {
@@ -304,6 +319,48 @@ final class AIConversationTests: XCTestCase {
 
         AIConversationLogURLProtocol.responseDelay = 0
     }
+
+    @MainActor
+    func testAssistantContinuesToolLoopAcrossMultipleModelResponses() async throws {
+        let suiteName = "AIConversationToolLoopTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        AISettings(baseURL: URL(string: "https://example.com/v1")!, model: "model", requiresActionConfirmation: false).save(to: defaults)
+        let keyStore = AIAPIKeyStore(defaults: defaults)
+        keyStore.saveAPIKey("test-api-key")
+
+        let container = try ModelContainer(
+            for: TodoItem.self, TodoGroup.self, DailySummary.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        AIConversationSequenceURLProtocol.responseBodies = [
+            #"{"choices":[{"message":{"content":"","tool_calls":[{"id":"call-1","type":"function","function":{"name":"create_todo","arguments":"{\"title\":\"第一项\",\"priority\":\"high\"}"}}]}}]}"#,
+            #"{"choices":[{"message":{"content":"","tool_calls":[{"id":"call-2","type":"function","function":{"name":"create_todo","arguments":"{\"title\":\"第二项\",\"priority\":\"medium\"}"}}]}}]}"#,
+            #"{"choices":[{"message":{"content":"已连续新增两项。"}}]}"#
+        ]
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [AIConversationSequenceURLProtocol.self]
+        let model = AIAssistantModel(
+            modelContext: container.mainContext,
+            client: AIClient(session: URLSession(configuration: sessionConfiguration)),
+            apiKeyStore: keyStore,
+            defaults: defaults,
+            logStore: AppDebugLogStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("AIConversationToolLoopTests-\(UUID().uuidString)"))
+        )
+
+        model.prompt = "新增两个事项"
+        model.submit()
+
+        try await waitUntil {
+            model.response == "已连续新增两项。"
+        }
+
+        let items = try container.mainContext.fetch(FetchDescriptor<TodoItem>())
+        XCTAssertEqual(items.map(\.title).sorted(), ["第一项", "第二项"])
+        XCTAssertTrue(model.proposals.isEmpty)
+    }
 }
 
 private final class AIConversationLogURLProtocol: URLProtocol {
@@ -338,6 +395,34 @@ private final class AIConversationLogURLProtocol: URLProtocol {
         } else {
             sendResponse()
         }
+    }
+
+    override func stopLoading() {}
+}
+
+private final class AIConversationSequenceURLProtocol: URLProtocol {
+    static var responseBodies: [String] = []
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        let body = Self.responseBodies.isEmpty ? #"{"choices":[{"message":{"content":"OK"}}]}"# : Self.responseBodies.removeFirst()
+        let data = Data(body.utf8)
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
     }
 
     override func stopLoading() {}

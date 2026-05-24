@@ -70,9 +70,29 @@ struct AIAssistantPanelView: View {
 
             if !model.proposals.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("待确认操作")
+                    HStack {
+                        Text("待确认操作")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(AIAssistantPanelStyle.secondaryTextOpacity))
+
+                        Spacer()
+
+                        Button("全部忽略") {
+                            model.dismissAllProposals()
+                        }
+                        .buttonStyle(.plain)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.white.opacity(AIAssistantPanelStyle.secondaryTextOpacity))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.white.opacity(0.12), in: Capsule())
+
+                        Button("全部执行") {
+                            model.applyAllProposals()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .font(.caption.weight(.semibold))
+                    }
 
                     ForEach(model.proposals) { proposal in
                         AIProposalRow(proposal: proposal, model: model)
@@ -290,8 +310,8 @@ private struct AITodoReferenceCard: View {
                         if let groupName = todo.groupName {
                             Text(groupName)
                         }
-                        if let deadlineAt = todo.deadlineAt {
-                            Text(TodoDeadlineFormatter.cardText(for: deadlineAt))
+                        if let scheduleText = todo.scheduleText {
+                            Text(scheduleText)
                         }
                     }
                     .font(.caption2.weight(.medium))

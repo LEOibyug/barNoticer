@@ -46,7 +46,10 @@ final class AIToolExecutor {
                 title: try arguments.string("title"),
                 priority: try arguments.priority("priority"),
                 groupID: arguments.optionalUUID("group_id"),
-                deadlineAt: arguments.optionalDate("deadline_at")
+                deadlineAt: arguments.optionalDate("deadline_at"),
+                scheduledTimes: arguments.optionalDates("scheduled_times"),
+                recurrenceRule: arguments.optionalRecurrenceRule("recurrence_rule"),
+                recurrenceAnchor: arguments.optionalDate("recurrence_anchor")
             ))
         case "update_todo":
             return .proposal(.updateTodo(
@@ -55,7 +58,11 @@ final class AIToolExecutor {
                 priority: arguments.optionalPriority("priority"),
                 groupID: arguments.optionalUUID("group_id"),
                 deadlineAt: arguments.optionalDate("deadline_at"),
-                clearsDeadline: arguments.optionalBool("clear_deadline") ?? false
+                scheduledTimes: arguments.optionalDates("scheduled_times"),
+                recurrenceRule: arguments.optionalRecurrenceRule("recurrence_rule"),
+                recurrenceAnchor: arguments.optionalDate("recurrence_anchor"),
+                clearsDeadline: arguments.optionalBool("clear_deadline") ?? false,
+                clearsSchedule: arguments.optionalBool("clear_schedule") ?? false
             ))
         case "complete_todo":
             return .proposal(.completeTodo(id: try arguments.uuid("id")))
@@ -91,11 +98,20 @@ final class AIToolExecutor {
     @discardableResult
     func apply(_ proposal: AIActionProposal) throws -> AIActionApplicationResult {
         switch proposal {
-        case let .createTodo(id, title, priority, groupID, deadlineAt):
-            modelContext.insert(TodoItem(id: id, title: title, priority: priority, groupID: groupID, deadlineAt: deadlineAt))
+        case let .createTodo(id, title, priority, groupID, deadlineAt, scheduledTimes, recurrenceRule, recurrenceAnchor):
+            modelContext.insert(TodoItem(
+                id: id,
+                title: title,
+                priority: priority,
+                groupID: groupID,
+                deadlineAt: deadlineAt,
+                scheduledTimes: scheduledTimes,
+                recurrenceRule: recurrenceRule,
+                recurrenceAnchor: recurrenceAnchor
+            ))
             try modelContext.save()
             return .createdTodo(id: id, title: title)
-        case let .updateTodo(id, title, priority, groupID, deadlineAt, clearsDeadline):
+        case let .updateTodo(id, title, priority, groupID, deadlineAt, scheduledTimes, recurrenceRule, recurrenceAnchor, clearsDeadline, clearsSchedule):
             let item = try fetchTodo(id: id)
             if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 item.updateTitle(title)
@@ -106,16 +122,21 @@ final class AIToolExecutor {
             if let groupID {
                 item.updateGroup(groupID)
             }
-            if let deadlineAt {
-                item.updateDeadline(deadlineAt)
+            if deadlineAt != nil || !scheduledTimes.isEmpty || recurrenceRule != nil || recurrenceAnchor != nil {
+                item.updateSchedule(
+                    deadlineAt: deadlineAt,
+                    scheduledTimes: scheduledTimes,
+                    recurrenceRule: recurrenceRule,
+                    recurrenceAnchor: recurrenceAnchor
+                )
             }
-            if clearsDeadline {
-                item.updateDeadline(nil)
+            if clearsDeadline || clearsSchedule {
+                item.clearSchedule()
             }
             try modelContext.save()
             return .updatedTodo(id: id)
         case let .completeTodo(id):
-            try fetchTodo(id: id).updateCompletion(true)
+            try fetchTodo(id: id).completeCurrentOccurrence()
             try modelContext.save()
             return .completedTodo(id: id)
         case let .deleteTodo(id):
@@ -266,6 +287,11 @@ private struct ToolArguments {
         return DateParser.iso8601(value)
     }
 
+    func optionalDates(_ key: String) -> [Date] {
+        guard let values = values[key] as? [String] else { return [] }
+        return values.compactMap(DateParser.iso8601).sorted()
+    }
+
     func optionalBool(_ key: String) -> Bool? {
         values[key] as? Bool
     }
@@ -286,6 +312,11 @@ private struct ToolArguments {
     func optionalPriority(_ key: String) -> TodoPriority? {
         guard let value = values[key] as? String else { return nil }
         return TodoPriority(rawValue: value)
+    }
+
+    func optionalRecurrenceRule(_ key: String) -> TodoRecurrenceRule? {
+        guard let value = values[key] as? String else { return nil }
+        return TodoRecurrenceRule(rawValue: value)
     }
 }
 

@@ -53,11 +53,11 @@ enum AIToolSchema {
     static let openAICompatibleTools: [AIToolDefinition] = [
         tool(
             name: "list_active_todos",
-            description: "读取当前未完成事项，按自定义分组返回，每条包含重要性和可选截止时间。"
+            description: "读取当前未完成事项，按自定义分组返回，每条包含重要性、可选截止时间、多个时间点或重复计划。"
         ),
         tool(
             name: "list_completed_todos",
-            description: "读取已完成事项，每条包含分组和可选截止时间。"
+            description: "读取已完成事项，每条包含分组和时间计划。"
         ),
         tool(
             name: "get_completion_stats",
@@ -74,7 +74,10 @@ enum AIToolSchema {
                 "title": .object(["type": .string("string")]),
                 "priority": .object(["type": .string("string"), "enum": .array([.string("high"), .string("medium"), .string("low")])]),
                 "group_id": .object(["type": .string("string")]),
-                "deadline_at": .object(["type": .string("string"), "description": .string("ISO8601 截止时间")])
+                "deadline_at": .object(["type": .string("string"), "description": .string("ISO8601 单次截止时间。用户说今天/明天/下周三时，先结合当前日期时间解析成明确 ISO8601。")]),
+                "scheduled_times": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("一次性多个时间点，ISO8601 字符串数组。展示和提醒只使用最近一个未到来的时间点。")]),
+                "recurrence_rule": .object(["type": .string("string"), "enum": .array([.string("daily"), .string("weekly"), .string("monthly")]), "description": .string("重复事项规则。")]),
+                "recurrence_anchor": .object(["type": .string("string"), "description": .string("重复事项起始时间，ISO8601。每天/每周/每月都从该时间推导下一次。")])
             ],
             required: ["title", "priority"]
         ),
@@ -86,8 +89,12 @@ enum AIToolSchema {
                 "title": .object(["type": .string("string")]),
                 "priority": .object(["type": .string("string"), "enum": .array([.string("high"), .string("medium"), .string("low")])]),
                 "group_id": .object(["type": .string("string")]),
-                "deadline_at": .object(["type": .string("string"), "description": .string("ISO8601 截止时间")]),
-                "clear_deadline": .object(["type": .string("boolean")])
+                "deadline_at": .object(["type": .string("string"), "description": .string("ISO8601 单次截止时间")]),
+                "scheduled_times": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("一次性多个时间点，ISO8601 字符串数组。")]),
+                "recurrence_rule": .object(["type": .string("string"), "enum": .array([.string("daily"), .string("weekly"), .string("monthly")])]),
+                "recurrence_anchor": .object(["type": .string("string"), "description": .string("重复事项起始时间，ISO8601。")]),
+                "clear_deadline": .object(["type": .string("boolean")]),
+                "clear_schedule": .object(["type": .string("boolean"), "description": .string("清除所有时间计划，包括 DDL、多时间点和重复规则。")])
             ],
             required: ["id"]
         ),

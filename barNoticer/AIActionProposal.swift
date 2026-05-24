@@ -1,8 +1,28 @@
 import Foundation
 
 enum AIActionProposal: Equatable, Identifiable {
-    case createTodo(id: UUID = UUID(), title: String, priority: TodoPriority, groupID: UUID? = nil, deadlineAt: Date? = nil)
-    case updateTodo(id: UUID, title: String?, priority: TodoPriority?, groupID: UUID? = nil, deadlineAt: Date? = nil, clearsDeadline: Bool = false)
+    case createTodo(
+        id: UUID = UUID(),
+        title: String,
+        priority: TodoPriority,
+        groupID: UUID? = nil,
+        deadlineAt: Date? = nil,
+        scheduledTimes: [Date] = [],
+        recurrenceRule: TodoRecurrenceRule? = nil,
+        recurrenceAnchor: Date? = nil
+    )
+    case updateTodo(
+        id: UUID,
+        title: String?,
+        priority: TodoPriority?,
+        groupID: UUID? = nil,
+        deadlineAt: Date? = nil,
+        scheduledTimes: [Date] = [],
+        recurrenceRule: TodoRecurrenceRule? = nil,
+        recurrenceAnchor: Date? = nil,
+        clearsDeadline: Bool = false,
+        clearsSchedule: Bool = false
+    )
     case completeTodo(id: UUID)
     case deleteTodo(id: UUID)
     case createGroup(id: UUID = UUID(), name: String, colorHex: String)
@@ -12,9 +32,9 @@ enum AIActionProposal: Equatable, Identifiable {
 
     var id: UUID {
         switch self {
-        case let .createTodo(id, _, _, _, _), let .createGroup(id, _, _), let .saveDailySummary(id, _):
+        case let .createTodo(id, _, _, _, _, _, _, _), let .createGroup(id, _, _), let .saveDailySummary(id, _):
             return id
-        case let .updateTodo(id, _, _, _, _, _), let .completeTodo(id), let .deleteTodo(id), let .updateGroup(id, _, _, _), let .deleteGroup(id):
+        case let .updateTodo(id, _, _, _, _, _, _, _, _, _), let .completeTodo(id), let .deleteTodo(id), let .updateGroup(id, _, _, _), let .deleteGroup(id):
             return id
         }
     }
@@ -23,7 +43,7 @@ enum AIActionProposal: Equatable, Identifiable {
 
     var referencedTodoID: UUID? {
         switch self {
-        case let .updateTodo(id, _, _, _, _, _), let .completeTodo(id), let .deleteTodo(id):
+        case let .updateTodo(id, _, _, _, _, _, _, _, _, _), let .completeTodo(id), let .deleteTodo(id):
             return id
         case .createTodo, .createGroup, .updateGroup, .deleteGroup, .saveDailySummary:
             return nil
@@ -32,7 +52,7 @@ enum AIActionProposal: Equatable, Identifiable {
 
     var groupID: UUID? {
         switch self {
-        case let .createTodo(_, _, _, groupID, _), let .updateTodo(_, _, _, groupID, _, _):
+        case let .createTodo(_, _, _, groupID, _, _, _, _), let .updateTodo(_, _, _, groupID, _, _, _, _, _, _):
             return groupID
         case let .updateGroup(id, _, _, _), let .deleteGroup(id):
             return id
@@ -43,7 +63,7 @@ enum AIActionProposal: Equatable, Identifiable {
 
     var deadlineAt: Date? {
         switch self {
-        case let .createTodo(_, _, _, _, deadlineAt), let .updateTodo(_, _, _, _, deadlineAt, _):
+        case let .createTodo(_, _, _, _, deadlineAt, _, _, _), let .updateTodo(_, _, _, _, deadlineAt, _, _, _, _, _):
             return deadlineAt
         case .completeTodo, .deleteTodo, .createGroup, .updateGroup, .deleteGroup, .saveDailySummary:
             return nil
@@ -52,9 +72,9 @@ enum AIActionProposal: Equatable, Identifiable {
 
     var summary: String {
         switch self {
-        case let .createTodo(_, title, priority, _, _):
+        case let .createTodo(_, title, priority, _, _, _, _, _):
             return "新增\(priority.title)重要性事项：\(title)"
-        case let .updateTodo(id, title, priority, groupID, deadlineAt, clearsDeadline):
+        case let .updateTodo(id, title, priority, groupID, deadlineAt, scheduledTimes, recurrenceRule, _, clearsDeadline, clearsSchedule):
             if let title, let priority {
                 return "修改事项：\(title)，重要性：\(priority.title)"
             }
@@ -70,7 +90,10 @@ enum AIActionProposal: Equatable, Identifiable {
             if deadlineAt != nil {
                 return "修改事项截止时间：\(id.uuidString)"
             }
-            if clearsDeadline {
+            if !scheduledTimes.isEmpty || recurrenceRule != nil {
+                return "修改事项时间计划：\(id.uuidString)"
+            }
+            if clearsDeadline || clearsSchedule {
                 return "清除事项截止时间：\(id.uuidString)"
             }
             return "修改事项：\(id.uuidString)"

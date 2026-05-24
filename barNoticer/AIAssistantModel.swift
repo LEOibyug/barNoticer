@@ -34,6 +34,7 @@ final class AIAssistantModel: ObservableObject {
     private let apiKeyStore: AIAPIKeyStore
     private let defaults: UserDefaults
     private let logStore: AppDebugLogStore
+    private let maxToolRounds = 6
 
     init(
         modelContext: ModelContext,
@@ -76,6 +77,19 @@ final class AIAssistantModel: ObservableObject {
         do {
             try applyConfirmed(proposal)
             proposals.removeAll { $0.id == proposal.id && $0.summary == proposal.summary }
+            todoReferenceRefreshID = UUID()
+        } catch {
+            state = .failed(error.localizedDescription)
+        }
+    }
+
+    func applyAllProposals() {
+        do {
+            for proposal in proposals {
+                try applyConfirmed(proposal)
+            }
+            proposals = []
+            todoReferenceRefreshID = UUID()
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -100,6 +114,10 @@ final class AIAssistantModel: ObservableObject {
 
     func dismiss(_ proposal: AIActionProposal) {
         proposals.removeAll { $0.id == proposal.id && $0.summary == proposal.summary }
+    }
+
+    func dismissAllProposals() {
+        proposals = []
     }
 
     func resetTransientOutput() {
@@ -137,66 +155,77 @@ final class AIAssistantModel: ObservableObject {
                 conversation: conversation
             )
 
-            let first = try await client.send(messages: messages, settings: settings, apiKey: apiKey)
-            guard !first.toolCalls.isEmpty else {
-                response = AIVisibleResponse.sanitized(first.content)
-                if response.isEmpty {
-                    response = AIVisibleResponse.fallbackText(toolCallCount: 0, proposalCount: 0)
+            var handledToolNames: [String] = []
+            var handledProposalCount = 0
+            var visibleResponse = ""
+
+            for _ in 0..<maxToolRounds {
+                let result = try await client.send(messages: messages, settings: settings, apiKey: apiKey)
+                let sanitized = AIVisibleResponse.sanitized(result.content)
+
+                guard !result.toolCalls.isEmpty else {
+                    visibleResponse = sanitized.isEmpty
+                        ? AIVisibleResponse.fallbackText(toolNames: handledToolNames, proposalCount: handledProposalCount)
+                        : sanitized
+                    break
                 }
-                conversation.appendAssistant(response)
-                logChat(role: "Assistant", content: response)
-                state = .ready
-                progress = .idle
-                syncConversationState()
-                log(.info, "AI request completed", metadata: ["toolCalls": "0"])
-                return
-            }
-            response = AIVisibleResponse.sanitized(first.content)
 
-            let assistantToolMessage = AIChatMessage(
-                role: "assistant",
-                content: first.content,
-                reasoningContent: first.reasoningContent,
-                toolCalls: first.toolCalls
-            )
-            messages.append(assistantToolMessage)
-            var pendingProposals: [AIActionProposal] = []
+                if !sanitized.isEmpty {
+                    response = sanitized
+                }
+                messages.append(AIChatMessage(
+                    role: "assistant",
+                    content: result.content,
+                    reasoningContent: result.reasoningContent,
+                    toolCalls: result.toolCalls
+                ))
 
-            for call in first.toolCalls {
-                progress = AIAssistantProgress.progress(forToolName: call.function.name)
-                log(.debug, "AI tool requested", metadata: ["tool": call.function.name])
-                let result = try executor.handle(call)
-                switch result {
-                case let .context(content):
-                    messages.append(AIChatMessage(role: "tool", content: content, toolCallID: call.id))
-                case let .proposal(proposal):
-                    pendingProposals.append(proposal)
-                    let toolMessage = settings.requiresActionConfirmation
-                        ? "已创建待确认操作：\(proposal.summary)"
-                        : try executor.apply(proposal).toolMessage
-                    messages.append(AIChatMessage(role: "tool", content: toolMessage, toolCallID: call.id))
+                var pendingProposals: [AIActionProposal] = []
+                for call in result.toolCalls {
+                    handledToolNames.append(call.function.name)
+                    progress = AIAssistantProgress.progress(forToolName: call.function.name)
+                    log(.debug, "AI tool requested", metadata: ["tool": call.function.name])
+                    let toolResult = try executor.handle(call)
+                    switch toolResult {
+                    case let .context(content):
+                        messages.append(AIChatMessage(role: "tool", content: content, toolCallID: call.id))
+                    case let .proposal(proposal):
+                        handledProposalCount += 1
+                        pendingProposals.append(proposal)
+                        let toolMessage = settings.requiresActionConfirmation
+                            ? "已创建待确认操作：\(proposal.summary)"
+                            : try executor.apply(proposal).toolMessage
+                        messages.append(AIChatMessage(role: "tool", content: toolMessage, toolCallID: call.id))
+                    }
+                }
+
+                if settings.requiresActionConfirmation, !pendingProposals.isEmpty {
+                    stageOrApply(pendingProposals, settings: settings)
+                    let final = try await client.send(messages: messages, settings: settings, apiKey: apiKey)
+                    let visibleFinal = AIVisibleResponse.sanitized(final.content)
+                    visibleResponse = visibleFinal.isEmpty
+                        ? (sanitized.isEmpty ? AIVisibleResponse.fallbackText(toolNames: handledToolNames, proposalCount: handledProposalCount) : sanitized)
+                        : visibleFinal
+                    break
+                }
+
+                if !settings.requiresActionConfirmation {
+                    proposals = []
+                    todoReferenceRefreshID = UUID()
                 }
             }
 
-            if settings.requiresActionConfirmation {
-                stageOrApply(pendingProposals, settings: settings)
-            } else {
-                proposals = []
-                todoReferenceRefreshID = UUID()
+            if visibleResponse.isEmpty {
+                visibleResponse = AIVisibleResponse.fallbackText(toolNames: handledToolNames, proposalCount: handledProposalCount)
             }
-            let final = try await client.send(messages: messages, settings: settings, apiKey: apiKey)
-            let visibleFinal = AIVisibleResponse.sanitized(final.content)
-            let visibleFirst = AIVisibleResponse.sanitized(first.content)
-            let visibleResponse = visibleFinal.isEmpty
-                ? (visibleFirst.isEmpty ? AIVisibleResponse.fallbackText(toolNames: first.toolCalls.map(\.function.name), proposalCount: pendingProposals.count) : visibleFirst)
-                : visibleFinal
+
             response = visibleResponse
             conversation.appendAssistant(visibleResponse)
             logChat(role: "Assistant", content: visibleResponse)
             state = .ready
             progress = .idle
             syncConversationState()
-            log(.info, "AI request completed", metadata: ["toolCalls": "\(first.toolCalls.count)", "proposals": "\(pendingProposals.count)"])
+            log(.info, "AI request completed", metadata: ["toolCalls": "\(handledToolNames.count)", "proposals": "\(handledProposalCount)"])
         } catch {
             state = .failed(error.localizedDescription)
             progress = .idle
@@ -219,7 +248,7 @@ final class AIAssistantModel: ObservableObject {
         guard let items = try? modelContext.fetch(FetchDescriptor<TodoItem>()),
               let item = items.first(where: { $0.id == id })
         else {
-            return AIReferencedTodo(id: id, title: "事项", priority: .low, groupName: nil, deadlineAt: nil, createdAt: nil, isCompleted: false, exists: false)
+            return AIReferencedTodo(id: id, title: "事项", priority: .low, groupName: nil, scheduleText: nil, createdAt: nil, isCompleted: false, exists: false)
         }
         let groups = (try? modelContext.fetch(FetchDescriptor<TodoGroup>())) ?? []
         let group = TodoGroupResolver.group(for: item, groups: groups)
@@ -228,7 +257,7 @@ final class AIAssistantModel: ObservableObject {
             title: item.title,
             priority: item.priority,
             groupName: group.name,
-            deadlineAt: item.deadlineAt,
+            scheduleText: TodoDeadlineFormatter.cardText(for: item),
             createdAt: item.createdAt,
             isCompleted: item.isCompleted,
             exists: true
@@ -294,7 +323,7 @@ struct AIReferencedTodo: Equatable, Identifiable {
     let title: String
     let priority: TodoPriority
     let groupName: String?
-    let deadlineAt: Date?
+    let scheduleText: String?
     let createdAt: Date?
     let isCompleted: Bool
     let exists: Bool

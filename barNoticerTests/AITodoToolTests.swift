@@ -132,6 +132,31 @@ final class AITodoToolTests: XCTestCase {
         XCTAssertEqual(model.proposals, [proposal])
     }
 
+    @MainActor
+    func testAssistantCanApplyAndDismissProposalBatches() throws {
+        let container = try ModelContainer(
+            for: TodoItem.self, TodoGroup.self, DailySummary.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let model = AIAssistantModel(modelContext: container.mainContext)
+        let proposals: [AIActionProposal] = [
+            .createTodo(title: "First batch item", priority: .high),
+            .createTodo(title: "Second batch item", priority: .medium)
+        ]
+
+        model.stageOrApply(proposals, settings: AISettings(requiresActionConfirmation: true))
+        model.applyAllProposals()
+
+        let items = try container.mainContext.fetch(FetchDescriptor<TodoItem>())
+        XCTAssertEqual(items.map(\.title).sorted(), ["First batch item", "Second batch item"])
+        XCTAssertTrue(model.proposals.isEmpty)
+
+        model.stageOrApply([.createTodo(title: "Ignored item", priority: .low)], settings: AISettings(requiresActionConfirmation: true))
+        model.dismissAllProposals()
+
+        XCTAssertTrue(model.proposals.isEmpty)
+    }
+
     func testAssistantProgressTextReflectsToolActivity() {
         XCTAssertEqual(AIAssistantProgress.idle.displayText, "")
         XCTAssertEqual(AIAssistantProgress.thinking.displayText, "思考中...")
@@ -161,13 +186,61 @@ final class AITodoToolTests: XCTestCase {
 
         let result = try executor.handle(call)
 
-        guard case let .proposal(.createTodo(_, title, priority, groupID, deadlineAt)) = result else {
+        guard case let .proposal(.createTodo(_, title, priority, groupID, deadlineAt, _, _, _)) = result else {
             return XCTFail("Expected create todo proposal")
         }
         XCTAssertEqual(title, "写周报")
         XCTAssertEqual(priority, .high)
         XCTAssertEqual(groupID, group.id)
         XCTAssertEqual(deadlineAt, deadline)
+    }
+
+    @MainActor
+    func testCreateTodoToolAcceptsMultipleTimesAndRecurrence() throws {
+        let container = try ModelContainer(
+            for: TodoItem.self, TodoGroup.self, DailySummary.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let executor = AIToolExecutor(modelContext: container.mainContext)
+        let call = AIToolCall(
+            id: "create-schedule-call",
+            type: "function",
+            function: .init(
+                name: "create_todo",
+                arguments: #"{"title":"喝水","priority":"medium","scheduled_times":["2026-05-24T09:00:00Z","2026-05-24T15:00:00Z"],"recurrence_rule":"daily","recurrence_anchor":"2026-05-24T09:00:00Z"}"#
+            )
+        )
+
+        let result = try executor.handle(call)
+
+        guard case let .proposal(.createTodo(_, title, priority, _, deadlineAt, scheduledTimes, recurrenceRule, recurrenceAnchor)) = result else {
+            return XCTFail("Expected scheduled create todo proposal")
+        }
+        XCTAssertEqual(title, "喝水")
+        XCTAssertEqual(priority, .medium)
+        XCTAssertNil(deadlineAt)
+        XCTAssertEqual(scheduledTimes.count, 2)
+        XCTAssertEqual(recurrenceRule, .daily)
+        XCTAssertEqual(recurrenceAnchor, ISO8601DateFormatter().date(from: "2026-05-24T09:00:00Z"))
+    }
+
+    @MainActor
+    func testRecurringTodoCompletionProposalRollsForwardInsteadOfCompleting() throws {
+        let container = try ModelContainer(
+            for: TodoItem.self, TodoGroup.self, DailySummary.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let anchor = ISO8601DateFormatter().date(from: "2026-05-24T09:00:00Z")!
+        let item = TodoItem(title: "每日站会", recurrenceRule: .daily, recurrenceAnchor: anchor)
+        container.mainContext.insert(item)
+        try container.mainContext.save()
+        let executor = AIToolExecutor(modelContext: container.mainContext)
+
+        try executor.apply(.completeTodo(id: item.id))
+
+        XCTAssertFalse(item.isCompleted)
+        XCTAssertNotNil(item.lastCompletedOccurrenceAt)
+        XCTAssertGreaterThan(item.nextOccurrence(after: anchor)!, anchor)
     }
 
     @MainActor

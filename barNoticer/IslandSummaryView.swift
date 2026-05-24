@@ -604,7 +604,11 @@ private struct IslandTodoLine: View {
     var body: some View {
         HStack(spacing: 10) {
             Button {
-                item.updateCompletion(true)
+                if item.scheduleKind == .recurring {
+                    item.completeCurrentOccurrence()
+                } else {
+                    item.updateCompletion(true)
+                }
             } label: {
                 Image(systemName: "circle")
                     .font(.system(size: 15, weight: .medium))
@@ -626,9 +630,9 @@ private struct IslandTodoLine: View {
                 HStack(spacing: 6) {
                     Text(TodoAgeFormatter.elapsedText(since: item.createdAt))
                     Text(TodoGroupResolver.group(for: item, groups: groups).name)
-                    if let deadlineAt = item.deadlineAt {
-                        Text(TodoDeadlineFormatter.cardText(for: deadlineAt))
-                            .foregroundStyle(deadlineAt < Date() ? .red.opacity(0.92) : .white.opacity(IslandSummaryStyle.tertiaryTextOpacity))
+                    if let occurrence = item.nextOccurrence(), let scheduleText = TodoDeadlineFormatter.cardText(for: item) {
+                        Text(scheduleText)
+                            .foregroundStyle(occurrence < Date() ? .red.opacity(0.92) : .white.opacity(IslandSummaryStyle.tertiaryTextOpacity))
                     }
                 }
                 .font(.caption2.weight(.medium))

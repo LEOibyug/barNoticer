@@ -7,6 +7,11 @@ struct AITodoItemSnapshot: Equatable, Identifiable, Codable {
     let groupID: UUID
     let groupName: String
     let deadlineAt: Date?
+    let scheduledTimes: [Date]
+    let recurrenceRule: TodoRecurrenceRule?
+    let recurrenceAnchor: Date?
+    let nextOccurrenceAt: Date?
+    let scheduleKind: TodoScheduleKind
     let isCompleted: Bool
     let createdAt: Date
     let updatedAt: Date
@@ -101,7 +106,11 @@ extension AITodoSnapshot {
             lines.append("\(priority.title)重要性：")
             lines.append(contentsOf: items.map { item in
                 let deadlineText = item.deadlineAt.map(Self.iso8601) ?? "none"
-                return "- id=\(item.id.uuidString) title=\(item.title) group=\(item.groupName) deadlineAt=\(deadlineText) createdAt=\(Self.iso8601(item.createdAt))"
+                let nextText = item.nextOccurrenceAt.map(Self.iso8601) ?? "none"
+                let scheduledText = item.scheduledTimes.map(Self.iso8601).joined(separator: ",")
+                let recurrenceText = item.recurrenceRule?.rawValue ?? "none"
+                let anchorText = item.recurrenceAnchor.map(Self.iso8601) ?? "none"
+                return "- id=\(item.id.uuidString) title=\(item.title) group=\(item.groupName) scheduleKind=\(item.scheduleKind.rawValue) deadlineAt=\(deadlineText) scheduledTimes=[\(scheduledText)] recurrenceRule=\(recurrenceText) recurrenceAnchor=\(anchorText) nextOccurrenceAt=\(nextText) createdAt=\(Self.iso8601(item.createdAt))"
             })
         }
 
@@ -152,6 +161,11 @@ extension AITodoItemSnapshot {
         groupID = group.id
         groupName = group.name
         deadlineAt = item.deadlineAt
+        scheduledTimes = item.scheduledTimes
+        recurrenceRule = item.recurrenceRule
+        recurrenceAnchor = item.recurrenceAnchor
+        nextOccurrenceAt = item.nextOccurrence()
+        scheduleKind = item.scheduleKind
         isCompleted = item.isCompleted
         createdAt = item.createdAt
         updatedAt = item.updatedAt

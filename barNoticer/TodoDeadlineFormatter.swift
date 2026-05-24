@@ -1,6 +1,21 @@
 import Foundation
 
 enum TodoDeadlineFormatter {
+    static func cardText(for item: TodoItem, now: Date = Date()) -> String? {
+        guard let date = item.nextOccurrence(after: now) else { return nil }
+        switch item.scheduleKind {
+        case .none:
+            return nil
+        case .singleDeadline:
+            return cardText(for: date, now: now)
+        case .multipleTimes:
+            return "下次 \(shortText(for: date, now: now)) · \(remainingText(until: date, now: now))"
+        case .recurring:
+            let rule = item.recurrenceRule?.title ?? "重复"
+            return "\(rule) · 下次 \(shortText(for: date, now: now)) · \(remainingText(until: date, now: now))"
+        }
+    }
+
     static func cardText(for date: Date, now: Date = Date()) -> String {
         "DDL \(shortText(for: date, now: now)) · \(remainingText(until: date, now: now))"
     }

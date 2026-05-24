@@ -32,7 +32,7 @@ struct ContentView: View {
             }
         case let .group(groupID):
             filtered = todoItems.filter { TodoGroupResolver.group(for: $0, groups: groups).id == groupID }
-        case .islandSettings, .aiSettings, .appSettings:
+        case .islandSettings, .aiSettings, .reminderSettings, .appSettings:
             filtered = todoItems
         }
         return TodoSorter.sorted(filtered, groups: groups)
@@ -98,6 +98,9 @@ struct ContentView: View {
             case .aiSettings:
                 AISettingsView()
                     .frame(minWidth: 560, minHeight: 440)
+            case .reminderSettings:
+                ReminderSettingsView()
+                    .frame(minWidth: 560, minHeight: 440)
             case .appSettings:
                 AppSettingsView()
                     .frame(minWidth: 560, minHeight: 440)
@@ -134,6 +137,8 @@ struct ContentView: View {
                     .tag(SidebarSelection.islandSettings)
                 Label("AI 设置", systemImage: "sparkles")
                     .tag(SidebarSelection.aiSettings)
+                Label("提醒设置", systemImage: "bell.badge")
+                    .tag(SidebarSelection.reminderSettings)
                 Label("应用设置", systemImage: "gearshape")
                     .tag(SidebarSelection.appSettings)
             }

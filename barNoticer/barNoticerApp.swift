@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var islandController: NotchIslandController?
     private var assistantController: AIAssistantPanelController?
     private var hotKeyController: GlobalHotKeyController?
+    private var reminderScheduler: ReminderScheduler?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -48,6 +49,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = NotchIslandController(modelContainer: modelContainer)
         controller.start()
         islandController = controller
+
+        let reminders = ReminderScheduler(modelContext: modelContainer.mainContext)
+        reminders.start()
+        reminderScheduler = reminders
 
         let assistant = AIAssistantPanelController(modelContext: modelContainer.mainContext)
         assistantController = assistant

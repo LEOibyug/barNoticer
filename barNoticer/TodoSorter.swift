@@ -27,13 +27,15 @@ enum TodoSorter {
                 return lhsGroup.sortOrder < rhsGroup.sortOrder
             }
 
-            let lhsDeadlineRank = deadlineRank(lhs.deadlineAt, now: now)
-            let rhsDeadlineRank = deadlineRank(rhs.deadlineAt, now: now)
+            let lhsDeadline = lhs.nextOccurrence(after: now)
+            let rhsDeadline = rhs.nextOccurrence(after: now)
+            let lhsDeadlineRank = deadlineRank(lhsDeadline, now: now)
+            let rhsDeadlineRank = deadlineRank(rhsDeadline, now: now)
             if lhsDeadlineRank != rhsDeadlineRank {
                 return lhsDeadlineRank < rhsDeadlineRank
             }
 
-            if let lhsDeadline = lhs.deadlineAt, let rhsDeadline = rhs.deadlineAt, lhsDeadline != rhsDeadline {
+            if let lhsDeadline, let rhsDeadline, lhsDeadline != rhsDeadline {
                 return lhsDeadline < rhsDeadline
             }
 
