@@ -173,4 +173,21 @@ final class IslandLayoutSettingsTests: XCTestCase {
         XCTAssertFalse(IslandWideGroupLayoutPolicy.needsHorizontalScroll(groupCount: 3))
         XCTAssertTrue(IslandWideGroupLayoutPolicy.needsHorizontalScroll(groupCount: 4))
     }
+
+    func testWideGroupLayoutUsesThreeBalancedColumnSlots() {
+        let availableWidth: CGFloat = 1140
+
+        XCTAssertEqual(
+            IslandWideGroupLayoutPolicy.columnWidth(availableWidth: availableWidth),
+            (availableWidth - IslandWideGroupLayoutPolicy.columnSpacing * 2) / 3
+        )
+        XCTAssertEqual(
+            IslandWideGroupLayoutPolicy.contentWidth(groupCount: 2, availableWidth: availableWidth),
+            availableWidth
+        )
+        XCTAssertEqual(
+            IslandWideGroupLayoutPolicy.contentWidth(groupCount: 4, availableWidth: availableWidth),
+            IslandWideGroupLayoutPolicy.columnWidth(availableWidth: availableWidth) * 4 + IslandWideGroupLayoutPolicy.columnSpacing * 3
+        )
+    }
 }

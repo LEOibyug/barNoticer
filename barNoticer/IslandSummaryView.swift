@@ -310,17 +310,25 @@ struct IslandSummaryView: View {
                 ))
                 .id(groupingMode)
             } else {
-                ScrollView(.horizontal) {
-                    HStack(alignment: .top, spacing: 10) {
-                        ForEach(visibleDisplayGroups) { displayGroup in
-                            IslandDisplayGroupColumn(displayGroup: displayGroup, groups: groups)
-                                .frame(width: IslandWideGroupLayoutPolicy.columnWidth)
+                GeometryReader { proxy in
+                    let columnWidth = IslandWideGroupLayoutPolicy.columnWidth(availableWidth: proxy.size.width)
+                    let contentWidth = IslandWideGroupLayoutPolicy.contentWidth(
+                        groupCount: visibleDisplayGroups.count,
+                        availableWidth: proxy.size.width
+                    )
+
+                    ScrollView(.horizontal) {
+                        HStack(alignment: .top, spacing: IslandWideGroupLayoutPolicy.columnSpacing) {
+                            ForEach(visibleDisplayGroups) { displayGroup in
+                                IslandDisplayGroupColumn(displayGroup: displayGroup, groups: groups)
+                                    .frame(width: columnWidth)
+                            }
                         }
+                        .frame(width: contentWidth, alignment: .leading)
+                        .padding(.horizontal, 1)
                     }
-                    .padding(.horizontal, 1)
-                    .frame(maxWidth: IslandWideGroupLayoutPolicy.needsHorizontalScroll(groupCount: visibleDisplayGroups.count) ? nil : .infinity, alignment: .leading)
+                    .scrollIndicators(.never)
                 }
-                .scrollIndicators(.never)
                 .transition(.asymmetric(
                     insertion: .opacity.combined(with: .move(edge: .trailing)),
                     removal: .opacity.combined(with: .move(edge: .leading))
@@ -409,10 +417,25 @@ enum IslandGroupingMode: String, CaseIterable, Identifiable {
 
 enum IslandWideGroupLayoutPolicy {
     static let maxVisibleColumns = 3
-    static let columnWidth: CGFloat = 238
+    static let columnSpacing: CGFloat = 10
 
     static func needsHorizontalScroll(groupCount: Int) -> Bool {
         groupCount > maxVisibleColumns
+    }
+
+    static func columnWidth(availableWidth: CGFloat) -> CGFloat {
+        let totalSpacing = columnSpacing * CGFloat(maxVisibleColumns - 1)
+        return max(0, (availableWidth - totalSpacing) / CGFloat(maxVisibleColumns))
+    }
+
+    static func contentWidth(groupCount: Int, availableWidth: CGFloat) -> CGFloat {
+        guard needsHorizontalScroll(groupCount: groupCount) else {
+            return availableWidth
+        }
+
+        let columnsWidth = columnWidth(availableWidth: availableWidth) * CGFloat(groupCount)
+        let spacingWidth = columnSpacing * CGFloat(max(0, groupCount - 1))
+        return columnsWidth + spacingWidth
     }
 }
 
