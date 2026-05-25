@@ -172,7 +172,7 @@ final class NotchIslandController: NSObject {
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        panel.collectionBehavior = IslandPanelPresentation.collectionBehavior
         panel.alphaValue = 0
         let hostingView = IslandTrackingHostingView(
             rootView: IslandSummaryView(openMainWindow: { [weak self] in
@@ -206,7 +206,7 @@ final class NotchIslandController: NSObject {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.ignoresMouseEvents = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        panel.collectionBehavior = IslandPanelPresentation.collectionBehavior
         panel.contentView = HotZonePreviewView(frame: panel.contentView?.bounds ?? .zero)
         hotZonePreviewPanel = panel
     }
@@ -399,6 +399,16 @@ final class NotchIslandController: NSObject {
 private struct IslandAnimation {
     let duration: TimeInterval
     let timingFunction: CAMediaTimingFunction
+}
+
+enum IslandPanelPresentation {
+    static let collectionBehavior: NSWindow.CollectionBehavior = [
+        .canJoinAllSpaces,
+        .fullScreenAuxiliary,
+        .moveToActiveSpace,
+        .stationary,
+        .ignoresCycle
+    ]
 }
 
 private final class InteractiveIslandPanel: NSPanel {

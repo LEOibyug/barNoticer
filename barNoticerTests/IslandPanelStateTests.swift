@@ -2,6 +2,14 @@ import XCTest
 @testable import barNoticer
 
 final class IslandPanelStateTests: XCTestCase {
+    func testIslandPanelsMoveToActiveSpaceWhenShown() {
+        XCTAssertTrue(IslandPanelPresentation.collectionBehavior.contains(.canJoinAllSpaces))
+        XCTAssertTrue(IslandPanelPresentation.collectionBehavior.contains(.fullScreenAuxiliary))
+        XCTAssertTrue(IslandPanelPresentation.collectionBehavior.contains(.moveToActiveSpace))
+        XCTAssertTrue(IslandPanelPresentation.collectionBehavior.contains(.stationary))
+        XCTAssertTrue(IslandPanelPresentation.collectionBehavior.contains(.ignoresCycle))
+    }
+
     func testIslandSummaryStyleKeepsSecondaryTextReadableOnBlackIsland() {
         XCTAssertGreaterThanOrEqual(IslandSummaryStyle.secondaryTextOpacity, 0.74)
         XCTAssertGreaterThanOrEqual(IslandSummaryStyle.tertiaryTextOpacity, 0.64)
