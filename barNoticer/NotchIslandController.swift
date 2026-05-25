@@ -405,7 +405,6 @@ enum IslandPanelPresentation {
     static let collectionBehavior: NSWindow.CollectionBehavior = [
         .canJoinAllSpaces,
         .fullScreenAuxiliary,
-        .moveToActiveSpace,
         .stationary,
         .ignoresCycle
     ]

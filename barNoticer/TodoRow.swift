@@ -31,6 +31,16 @@ struct TodoRow: View {
         .padding(.vertical, 6)
         .onAppear {
             syncDeadlineState()
+            syncTitleState()
+        }
+        .id(item.id)
+        .onChange(of: item.id) { _, _ in
+            syncTitleState()
+            syncDeadlineState()
+        }
+        .onChange(of: item.title) { _, newTitle in
+            guard !isTitleFocused else { return }
+            editedTitle = newTitle
         }
         .onChange(of: item.updatedAt) { _, _ in
             syncDeadlineState()
@@ -64,9 +74,6 @@ struct TodoRow: View {
                 if !focused {
                     commitTitle()
                 }
-            }
-            .onAppear {
-                editedTitle = item.title
             }
     }
 
@@ -228,6 +235,10 @@ struct TodoRow: View {
         }
         recurrenceRule = item.recurrenceRule ?? .daily
         recurrenceAnchor = item.recurrenceAnchor ?? item.nextOccurrence() ?? Date().addingTimeInterval(3_600)
+    }
+
+    private func syncTitleState() {
+        editedTitle = item.title
     }
 
     private func applyScheduleEditor() {

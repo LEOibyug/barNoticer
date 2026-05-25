@@ -109,42 +109,62 @@ struct ContentView: View {
     }
 
     private var sidebar: some View {
-        List(selection: $selection) {
+        List {
             Section("待办") {
-                Label("进行中", systemImage: "circle")
-                    .tag(SidebarSelection.filter(.active))
-                Label("已完成", systemImage: "checkmark.circle")
-                    .tag(SidebarSelection.filter(.completed))
-                Label("全部", systemImage: "tray.full")
-                    .tag(SidebarSelection.filter(.all))
+                sidebarButton(.filter(.active), title: "进行中", systemImage: "circle")
+                sidebarButton(.filter(.completed), title: "已完成", systemImage: "checkmark.circle")
+                sidebarButton(.filter(.all), title: "全部", systemImage: "tray.full")
             }
 
             Section("分组") {
                 ForEach(groups) { group in
-                    Label {
+                    sidebarButton(.group(group.id)) {
                         Text(group.name)
                     } icon: {
                         Circle()
                             .fill(group.color)
                             .frame(width: 9, height: 9)
                     }
-                    .tag(SidebarSelection.group(group.id))
                 }
             }
 
             Section("偏好") {
-                Label("岛设置", systemImage: "slider.horizontal.3")
-                    .tag(SidebarSelection.islandSettings)
-                Label("AI 设置", systemImage: "sparkles")
-                    .tag(SidebarSelection.aiSettings)
-                Label("提醒设置", systemImage: "bell.badge")
-                    .tag(SidebarSelection.reminderSettings)
-                Label("应用设置", systemImage: "gearshape")
-                    .tag(SidebarSelection.appSettings)
+                sidebarButton(.islandSettings, title: "岛设置", systemImage: "slider.horizontal.3")
+                sidebarButton(.aiSettings, title: "AI 设置", systemImage: "sparkles")
+                sidebarButton(.reminderSettings, title: "提醒设置", systemImage: "bell.badge")
+                sidebarButton(.appSettings, title: "应用设置", systemImage: "gearshape")
             }
         }
         .navigationTitle("barNoticer")
         .frame(minWidth: 150)
+    }
+
+    private func sidebarButton(_ target: SidebarSelection, title: String, systemImage: String) -> some View {
+        sidebarButton(target) {
+            Text(title)
+        } icon: {
+            Image(systemName: systemImage)
+        }
+    }
+
+    private func sidebarButton<Title: View, Icon: View>(
+        _ target: SidebarSelection,
+        @ViewBuilder title: () -> Title,
+        @ViewBuilder icon: () -> Icon
+    ) -> some View {
+        Button {
+            selection = target
+        } label: {
+            Label {
+                title()
+            } icon: {
+                icon()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(selection == target ? Color.accentColor.opacity(0.16) : Color.clear)
     }
 
     private var header: some View {

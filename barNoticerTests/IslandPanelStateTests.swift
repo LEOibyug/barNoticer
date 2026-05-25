@@ -2,10 +2,10 @@ import XCTest
 @testable import barNoticer
 
 final class IslandPanelStateTests: XCTestCase {
-    func testIslandPanelsMoveToActiveSpaceWhenShown() {
+    func testIslandPanelsCanJoinAllSpacesWithoutMovingBetweenSpaces() {
         XCTAssertTrue(IslandPanelPresentation.collectionBehavior.contains(.canJoinAllSpaces))
         XCTAssertTrue(IslandPanelPresentation.collectionBehavior.contains(.fullScreenAuxiliary))
-        XCTAssertTrue(IslandPanelPresentation.collectionBehavior.contains(.moveToActiveSpace))
+        XCTAssertFalse(IslandPanelPresentation.collectionBehavior.contains(.moveToActiveSpace))
         XCTAssertTrue(IslandPanelPresentation.collectionBehavior.contains(.stationary))
         XCTAssertTrue(IslandPanelPresentation.collectionBehavior.contains(.ignoresCycle))
     }
