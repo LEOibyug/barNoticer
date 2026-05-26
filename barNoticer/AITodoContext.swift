@@ -95,8 +95,9 @@ extension AITodoSnapshot {
     ) -> AITodoInlineContext {
         var lines = [
             "当前任务上下文。引用已有事项时必须使用 [[todo:<UUID>]]：",
-            "当前日期时间：\(Self.iso8601(now))；时区：\(Self.timeZoneDescription(timeZone))。",
-            "相对日期必须基于当前日期时间解析，例如今天、明天、下周三都要转换为明确 ISO8601 截止时间。",
+            "当前本地时间：\(Self.localDateTime(now, timeZone: timeZone))；当前 ISO8601：\(Self.iso8601(now))；时区：\(Self.timeZoneDescription(timeZone))。",
+            "相对日期必须基于当前本地时间解析，例如今天、明天、下周三都要转换为明确 ISO8601 截止时间。",
+            "已有事项的 deadlineLocal、scheduledTimesLocal、recurrenceAnchorLocal、nextOccurrenceLocal 是按当前时区解释后的权威时间；不要根据 createdAt 或 updatedAt 推断截止日期。",
             "未完成：\(stats.activeCount)；已完成：\(stats.completedCount)。"
         ]
 
@@ -106,11 +107,15 @@ extension AITodoSnapshot {
             lines.append("\(priority.title)重要性：")
             lines.append(contentsOf: items.map { item in
                 let deadlineText = item.deadlineAt.map(Self.iso8601) ?? "none"
+                let deadlineLocalText = item.deadlineAt.map { Self.localDateTime($0, timeZone: timeZone) } ?? "none"
                 let nextText = item.nextOccurrenceAt.map(Self.iso8601) ?? "none"
+                let nextLocalText = item.nextOccurrenceAt.map { Self.localDateTime($0, timeZone: timeZone) } ?? "none"
                 let scheduledText = item.scheduledTimes.map(Self.iso8601).joined(separator: ",")
+                let scheduledLocalText = item.scheduledTimes.map { Self.localDateTime($0, timeZone: timeZone) }.joined(separator: ",")
                 let recurrenceText = item.recurrenceRule?.rawValue ?? "none"
                 let anchorText = item.recurrenceAnchor.map(Self.iso8601) ?? "none"
-                return "- id=\(item.id.uuidString) title=\(item.title) group=\(item.groupName) scheduleKind=\(item.scheduleKind.rawValue) deadlineAt=\(deadlineText) scheduledTimes=[\(scheduledText)] recurrenceRule=\(recurrenceText) recurrenceAnchor=\(anchorText) nextOccurrenceAt=\(nextText) createdAt=\(Self.iso8601(item.createdAt))"
+                let anchorLocalText = item.recurrenceAnchor.map { Self.localDateTime($0, timeZone: timeZone) } ?? "none"
+                return "- id=\(item.id.uuidString) title=\(item.title) group=\(item.groupName) scheduleKind=\(item.scheduleKind.rawValue) deadlineAt=\(deadlineText) deadlineLocal=\(deadlineLocalText) scheduledTimes=[\(scheduledText)] scheduledTimesLocal=[\(scheduledLocalText)] recurrenceRule=\(recurrenceText) recurrenceAnchor=\(anchorText) recurrenceAnchorLocal=\(anchorLocalText) nextOccurrenceAt=\(nextText) nextOccurrenceLocal=\(nextLocalText) createdAt=\(Self.iso8601(item.createdAt)) updatedAt=\(Self.iso8601(item.updatedAt))"
             })
         }
 
@@ -141,6 +146,14 @@ extension AITodoSnapshot {
 
     private static func iso8601(_ date: Date) -> String {
         ISO8601DateFormatter().string(from: date)
+    }
+
+    private static func localDateTime(_ date: Date, timeZone: TimeZone) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.string(from: date)
     }
 
     private static func timeZoneDescription(_ timeZone: TimeZone) -> String {

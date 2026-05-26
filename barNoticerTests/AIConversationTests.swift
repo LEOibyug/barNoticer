@@ -164,7 +164,8 @@ final class AIConversationTests: XCTestCase {
     func testSystemPromptUsesCurrentContextForRelativeDates() {
         XCTAssertTrue(AISystemPrompt.text.contains("相对日期"))
         XCTAssertTrue(AISystemPrompt.text.contains("今天、明天、下周"))
-        XCTAssertTrue(AISystemPrompt.text.contains("当前日期"))
+        XCTAssertTrue(AISystemPrompt.text.contains("当前本地时间"))
+        XCTAssertTrue(AISystemPrompt.text.contains("deadlineLocal"))
     }
 
     func testRequestBuilderIncludesInlineTodoContextBeforeConversation() {
@@ -218,9 +219,34 @@ final class AIConversationTests: XCTestCase {
 
         let context = snapshot.inlineContext(now: now, timeZone: TimeZone(secondsFromGMT: 8 * 3_600)!).content
 
-        XCTAssertTrue(context.contains("当前日期时间："))
+        XCTAssertTrue(context.contains("当前本地时间："))
+        XCTAssertTrue(context.contains("当前 ISO8601："))
         XCTAssertTrue(context.contains("时区：GMT+08:00"))
         XCTAssertTrue(context.contains("相对日期"))
+    }
+
+    func testInlineTodoContextUsesLocalDeadlineIndependentOfCreationDate() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 8 * 3_600)!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 5, day: 26, hour: 9, minute: 0))!
+        let createdAt = calendar.date(from: DateComponents(year: 2026, month: 5, day: 25, hour: 20, minute: 0))!
+        let updatedAt = calendar.date(from: DateComponents(year: 2026, month: 5, day: 26, hour: 8, minute: 50))!
+        let deadline = calendar.date(from: DateComponents(year: 2026, month: 5, day: 26, hour: 14, minute: 0))!
+        let item = TodoItem(
+            title: "打印信息论电子版作业",
+            priority: .high,
+            deadlineAt: deadline,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+        let snapshot = AITodoContext.snapshot(items: [item], groups: [], now: now)
+
+        let context = snapshot.inlineContext(now: now, timeZone: calendar.timeZone).content
+
+        XCTAssertTrue(context.contains("当前本地时间：2026-05-26 09:00"))
+        XCTAssertTrue(context.contains("deadlineLocal=2026-05-26 14:00"))
+        XCTAssertTrue(context.contains("nextOccurrenceLocal=2026-05-26 14:00"))
+        XCTAssertTrue(context.contains("不要根据 createdAt 或 updatedAt 推断截止日期"))
     }
 
     @MainActor

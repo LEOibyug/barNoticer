@@ -102,18 +102,22 @@ enum AIReminderPromptBuilder {
     private static func userContext(context: ReminderContext, trigger: ReminderTrigger) -> String {
         var lines = [
             "触发来源：\(trigger.title)",
-            "当前日期时间：\(iso8601(context.now))",
+            "当前本地时间：\(localDateTime(context.now, timeZone: context.timeZone))",
+            "当前 ISO8601：\(iso8601(context.now))",
             "时区：\(timeZoneDescription(context.timeZone))",
-            "相对日期描述必须以当前日期时间为基准。",
+            "相对日期描述必须以当前本地时间为基准。",
+            "已有事项的 deadlineLocal 和 nextOccurrenceLocal 是按当前时区解释后的权威时间；不要根据 createdAt 或 updatedAt 推断截止日期。",
             "全部事项："
         ]
 
         for todo in context.todos {
             let deadline = todo.deadlineAt.map(iso8601) ?? "none"
+            let deadlineLocal = todo.deadlineAt.map { localDateTime($0, timeZone: context.timeZone) } ?? "none"
             let next = todo.nextOccurrenceAt.map(iso8601) ?? "none"
+            let nextLocal = todo.nextOccurrenceAt.map { localDateTime($0, timeZone: context.timeZone) } ?? "none"
             let recurrence = todo.recurrenceRule?.rawValue ?? "none"
             let status = todo.isCompleted ? "completed" : "active"
-            lines.append("- id=\(todo.id.uuidString) title=\(todo.title) priority=\(todo.priority.rawValue) group=\(todo.groupName) status=\(status) scheduleKind=\(todo.scheduleKind.rawValue) deadlineAt=\(deadline) recurrenceRule=\(recurrence) nextOccurrenceAt=\(next) createdAt=\(iso8601(todo.createdAt)) updatedAt=\(iso8601(todo.updatedAt))")
+            lines.append("- id=\(todo.id.uuidString) title=\(todo.title) priority=\(todo.priority.rawValue) group=\(todo.groupName) status=\(status) scheduleKind=\(todo.scheduleKind.rawValue) deadlineAt=\(deadline) deadlineLocal=\(deadlineLocal) recurrenceRule=\(recurrence) nextOccurrenceAt=\(next) nextOccurrenceLocal=\(nextLocal) createdAt=\(iso8601(todo.createdAt)) updatedAt=\(iso8601(todo.updatedAt))")
         }
 
         lines.append("分组：")
@@ -134,6 +138,14 @@ enum AIReminderPromptBuilder {
 
     private static func iso8601(_ date: Date) -> String {
         ISO8601DateFormatter().string(from: date)
+    }
+
+    private static func localDateTime(_ date: Date, timeZone: TimeZone) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.string(from: date)
     }
 
     private static func timeZoneDescription(_ timeZone: TimeZone) -> String {

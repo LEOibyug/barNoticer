@@ -100,8 +100,11 @@ final class ReminderEngineTests: XCTestCase {
         let messages = AIReminderPromptBuilder.messages(context: context, trigger: .aiPoll)
         let joined = messages.compactMap(\.content).joined(separator: "\n")
 
-        XCTAssertTrue(joined.contains("当前日期时间："))
+        XCTAssertTrue(joined.contains("当前本地时间："))
+        XCTAssertTrue(joined.contains("当前 ISO8601："))
         XCTAssertTrue(joined.contains("时区：GMT+08:00"))
+        XCTAssertTrue(joined.contains("deadlineLocal="))
+        XCTAssertTrue(joined.contains("nextOccurrenceLocal="))
         XCTAssertTrue(joined.contains(id.uuidString))
         XCTAssertTrue(joined.contains("复盘提醒系统"))
         XCTAssertTrue(joined.contains("近期提醒历史"))
