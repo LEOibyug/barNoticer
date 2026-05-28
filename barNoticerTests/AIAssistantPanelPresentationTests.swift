@@ -117,4 +117,10 @@ final class AIAssistantPanelPresentationTests: XCTestCase {
 
         XCTAssertEqual(field.stringValue, "")
     }
+
+    func testPromptPlaceholderHidesWhileInputMethodCompositionIsActive() {
+        XCTAssertTrue(PromptPlaceholderVisibility.shouldShowPlaceholder(text: "", isComposingText: false))
+        XCTAssertFalse(PromptPlaceholderVisibility.shouldShowPlaceholder(text: "", isComposingText: true))
+        XCTAssertFalse(PromptPlaceholderVisibility.shouldShowPlaceholder(text: "你好", isComposingText: false))
+    }
 }

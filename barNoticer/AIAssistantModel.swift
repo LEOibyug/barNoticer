@@ -19,6 +19,7 @@ final class AIAssistantModel: ObservableObject {
     }
 
     @Published var prompt = ""
+    @Published var isComposingPromptText = false
     @Published private(set) var response = ""
     @Published private(set) var proposals: [AIActionProposal] = []
     @Published private(set) var state: State = .idle
@@ -54,11 +55,16 @@ final class AIAssistantModel: ObservableObject {
         !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && state != .loading
     }
 
+    var shouldShowPromptPlaceholder: Bool {
+        PromptPlaceholderVisibility.shouldShowPlaceholder(text: prompt, isComposingText: isComposingPromptText)
+    }
+
     func submit() {
         let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
         prompt = ""
+        isComposingPromptText = false
         response = ""
         proposals = []
         state = .loading

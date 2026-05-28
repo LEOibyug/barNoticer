@@ -18,6 +18,7 @@ struct IslandSummaryView: View {
     var openMainWindow: () -> Void = {}
 
     @State private var quickAddDraft = IslandQuickAddDraft()
+    @State private var isComposingQuickAddText = false
     @State private var layoutVersion = 0
     @AppStorage(IslandDisplayMode.storageKey) private var modeRawValue = IslandDisplayMode.standard.rawValue
     @AppStorage(IslandGroupingMode.storageKey) private var groupingModeRawValue = IslandGroupingMode.defaultMode.rawValue
@@ -186,19 +187,24 @@ struct IslandSummaryView: View {
             .help("选择重要性")
 
             ZStack(alignment: .leading) {
-                if quickAddDraft.title.isEmpty {
+                if PromptPlaceholderVisibility.shouldShowPlaceholder(
+                    text: quickAddDraft.title,
+                    isComposingText: isComposingQuickAddText
+                ) {
                     Text("输入新待办，回车添加")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.white.opacity(0.72))
                         .allowsHitTesting(false)
                 }
 
-                TextField("", text: $quickAddDraft.title)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white)
-                    .tint(.white)
-                    .onSubmit(addTodo)
+                ComposingAwareTextField(
+                    text: $quickAddDraft.title,
+                    isComposingText: $isComposingQuickAddText,
+                    font: .systemFont(ofSize: 13, weight: .medium),
+                    textColor: .white,
+                    onSubmit: addTodo
+                )
+                .frame(height: 18)
             }
 
             Menu {
@@ -379,6 +385,7 @@ struct IslandSummaryView: View {
             deadlineAt: quickAddDraft.deadlineAt
         ))
         quickAddDraft.clearTitle()
+        isComposingQuickAddText = false
     }
 
     private func wideItems(for priority: TodoPriority) -> [TodoItem] {

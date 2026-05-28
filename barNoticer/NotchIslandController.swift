@@ -68,6 +68,8 @@ final class NotchIslandController: NSObject {
 
     func showIsland() {
         guard let islandPanel else { return }
+        panelState.recoverIfTransitionTimedOut(timeout: islandTransitionRecoveryTimeout)
+        panelState.reconcile(isPanelVisible: islandPanel.isVisible)
         guard let transition = panelState.beginShowing() else { return }
 
         hideWorkItem?.cancel()
@@ -231,6 +233,12 @@ final class NotchIslandController: NSObject {
 
     private func pollPointerLocation() {
         guard !isPreviewingIsland else { return }
+        if islandPanel == nil {
+            installIslandPanel()
+        }
+        if pointerPollTimer?.isValid != true {
+            startPointerPolling()
+        }
 
         let mouseLocation = NSEvent.mouseLocation
         let pointerInHotZone = hotZoneFrame().contains(mouseLocation)
@@ -400,6 +408,8 @@ private struct IslandAnimation {
     let duration: TimeInterval
     let timingFunction: CAMediaTimingFunction
 }
+
+private let islandTransitionRecoveryTimeout: TimeInterval = 2.0
 
 enum IslandPanelPresentation {
     static let collectionBehavior: NSWindow.CollectionBehavior = [

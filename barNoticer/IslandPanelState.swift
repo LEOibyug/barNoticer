@@ -1,3 +1,5 @@
+import Foundation
+
 struct IslandPanelState {
     struct Transition: Equatable {
         fileprivate let id: Int
@@ -13,11 +15,12 @@ struct IslandPanelState {
     private var phase: Phase = .hidden
     private var nextTransitionID = 0
     private var activeTransition: Transition?
+    private var transitionStartedAt: Date?
 
-    mutating func beginShowing() -> Transition? {
+    mutating func beginShowing(now: Date = Date()) -> Transition? {
         switch phase {
         case .hidden, .closing:
-            let transition = nextTransition()
+            let transition = nextTransition(now: now)
             phase = .opening
             activeTransition = transition
             return transition
@@ -32,6 +35,7 @@ struct IslandPanelState {
 
         phase = .shown
         activeTransition = nil
+        transitionStartedAt = nil
         return true
     }
 
@@ -39,8 +43,8 @@ struct IslandPanelState {
         activeTransition == transition
     }
 
-    mutating func beginHiding() -> Transition {
-        let transition = nextTransition()
+    mutating func beginHiding(now: Date = Date()) -> Transition {
+        let transition = nextTransition(now: now)
         phase = .closing
         activeTransition = transition
         return transition
@@ -52,11 +56,41 @@ struct IslandPanelState {
 
         phase = .hidden
         activeTransition = nil
+        transitionStartedAt = nil
         return true
     }
 
-    private mutating func nextTransition() -> Transition {
+    mutating func recoverIfTransitionTimedOut(now: Date = Date(), timeout: TimeInterval = 2) {
+        guard let transitionStartedAt, now.timeIntervalSince(transitionStartedAt) >= timeout else {
+            return
+        }
+
+        switch phase {
+        case .opening, .closing:
+            phase = .hidden
+            activeTransition = nil
+            self.transitionStartedAt = nil
+        case .hidden, .shown:
+            return
+        }
+    }
+
+    mutating func reconcile(isPanelVisible: Bool) {
+        guard !isPanelVisible else { return }
+
+        switch phase {
+        case .opening, .shown, .closing:
+            phase = .hidden
+            activeTransition = nil
+            transitionStartedAt = nil
+        case .hidden:
+            return
+        }
+    }
+
+    private mutating func nextTransition(now: Date) -> Transition {
         nextTransitionID += 1
+        transitionStartedAt = now
         return Transition(id: nextTransitionID)
     }
 }

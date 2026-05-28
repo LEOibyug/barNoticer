@@ -52,4 +52,39 @@ final class IslandPanelStateTests: XCTestCase {
 
         XCTAssertFalse(state.finishShowing(showTransition))
     }
+
+    func testOpeningTransitionCanRecoverAfterTimeout() throws {
+        var state = IslandPanelState()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        XCTAssertNotNil(state.beginShowing(now: startedAt))
+        XCTAssertNil(state.beginShowing())
+        state.recoverIfTransitionTimedOut(now: startedAt.addingTimeInterval(3), timeout: 2)
+
+        XCTAssertNotNil(state.beginShowing())
+    }
+
+    func testClosingTransitionCanRecoverAfterTimeout() throws {
+        var state = IslandPanelState()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let transition = try XCTUnwrap(state.beginShowing(now: startedAt))
+        XCTAssertTrue(state.finishShowing(transition))
+        _ = state.beginHiding(now: startedAt.addingTimeInterval(1))
+        state.recoverIfTransitionTimedOut(now: startedAt.addingTimeInterval(4), timeout: 2)
+
+        XCTAssertNotNil(state.beginShowing())
+    }
+
+    func testInvisiblePanelReconcilesShownStateToHidden() throws {
+        var state = IslandPanelState()
+
+        let transition = try XCTUnwrap(state.beginShowing())
+        XCTAssertTrue(state.finishShowing(transition))
+        XCTAssertNil(state.beginShowing())
+
+        state.reconcile(isPanelVisible: false)
+
+        XCTAssertNotNil(state.beginShowing())
+    }
 }

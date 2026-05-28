@@ -40,4 +40,15 @@ final class TodoDeadlineFormatterTests: XCTestCase {
         XCTAssertTrue(text.contains("DDL"))
         XCTAssertTrue(text.contains("剩余2小时"))
     }
+
+    func testCompletedSingleDeadlineTodoDoesNotShowOverdueCardText() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let item = TodoItem(
+            title: "已交作业",
+            deadlineAt: now.addingTimeInterval(-2 * 3_600),
+            isCompleted: true
+        )
+
+        XCTAssertNil(TodoDeadlineFormatter.cardText(for: item, now: now))
+    }
 }

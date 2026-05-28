@@ -43,7 +43,7 @@ struct AIAssistantPanelView: View {
                             .foregroundStyle(.white.opacity(AIAssistantPanelStyle.primaryTextOpacity))
                             .transition(.opacity.combined(with: .scale(scale: 0.98)))
                             .allowsHitTesting(false)
-                    } else if model.prompt.isEmpty {
+                    } else if model.shouldShowPromptPlaceholder {
                         Text("询问 AI，或写下当日总结")
                             .font(.system(size: 18, weight: .medium))
                             .foregroundStyle(.white.opacity(AIAssistantPanelStyle.secondaryTextOpacity))
@@ -52,6 +52,7 @@ struct AIAssistantPanelView: View {
 
                     TransparentPromptEditor(
                         text: $model.prompt,
+                        isComposingText: $model.isComposingPromptText,
                         focusRequestID: model.focusRequestID,
                         onSubmit: model.submit
                     )

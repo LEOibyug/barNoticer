@@ -2,6 +2,7 @@ import Foundation
 
 enum TodoDeadlineFormatter {
     static func cardText(for item: TodoItem, now: Date = Date()) -> String? {
+        guard !item.isCompleted else { return nil }
         guard let date = item.nextOccurrence(after: now) else { return nil }
         switch item.scheduleKind {
         case .none:
