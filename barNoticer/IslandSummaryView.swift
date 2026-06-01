@@ -1,3 +1,4 @@
+import Combine
 import SwiftData
 import SwiftUI
 
@@ -7,6 +8,10 @@ enum IslandSummaryStyle {
     static let subtleTextOpacity = 0.64
     static let itemBackgroundOpacity = 0.12
     static let dividerOpacity = 0.14
+}
+
+enum IslandSummaryRefreshPolicy {
+    static let timelineInterval: TimeInterval = 60
 }
 
 struct IslandSummaryView: View {
@@ -20,6 +25,7 @@ struct IslandSummaryView: View {
     @State private var quickAddDraft = IslandQuickAddDraft()
     @State private var isComposingQuickAddText = false
     @State private var layoutVersion = 0
+    @State private var now = Date()
     @AppStorage(IslandDisplayMode.storageKey) private var modeRawValue = IslandDisplayMode.standard.rawValue
     @AppStorage(IslandGroupingMode.storageKey) private var groupingModeRawValue = IslandGroupingMode.defaultMode.rawValue
 
@@ -37,7 +43,7 @@ struct IslandSummaryView: View {
     }
 
     private var activeItems: [TodoItem] {
-        TodoSorter.sorted(todoItems, groups: groups).filter { !$0.isCompleted }
+        TodoSorter.sorted(todoItems, groups: groups, now: now).filter { !$0.isCompleted }
     }
 
     private var groups: [TodoGroup] {
@@ -45,11 +51,11 @@ struct IslandSummaryView: View {
     }
 
     private var visibleDisplayGroups: [TodoDisplayGroup] {
-        TodoSorter.displayGroups(items: IslandStandardTodoPolicy.items(from: activeItems), groups: groups)
+        TodoSorter.displayGroups(items: IslandStandardTodoPolicy.items(from: activeItems), groups: groups, now: now)
     }
 
     private var visiblePriorityGroups: [TodoPriorityGroup] {
-        TodoSorter.priorityGroups(IslandStandardTodoPolicy.items(from: activeItems))
+        TodoSorter.priorityGroups(IslandStandardTodoPolicy.items(from: activeItems), now: now)
     }
 
     private var topBridgeHeight: CGFloat {
@@ -73,6 +79,12 @@ struct IslandSummaryView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: IslandLayoutSettings.didChangeNotification)) { _ in
             layoutVersion += 1
+        }
+        .onAppear {
+            now = Date()
+        }
+        .onReceive(Timer.publish(every: IslandSummaryRefreshPolicy.timelineInterval, on: .main, in: .common).autoconnect()) { date in
+            now = date
         }
     }
 
@@ -277,13 +289,13 @@ struct IslandSummaryView: View {
                         if groupingMode == .priority {
                             VStack(spacing: 8) {
                                 ForEach(visiblePriorityGroups) { priorityGroup in
-                                    IslandPrioritySection(priority: priorityGroup.priority, items: priorityGroup.items, groups: groups)
+                                    IslandPrioritySection(priority: priorityGroup.priority, items: priorityGroup.items, groups: groups, now: now)
                                 }
                             }
                         } else {
                             VStack(spacing: 8) {
                                 ForEach(visibleDisplayGroups) { displayGroup in
-                                    IslandDisplayGroupSection(displayGroup: displayGroup, groups: groups)
+                                    IslandDisplayGroupSection(displayGroup: displayGroup, groups: groups, now: now)
                                 }
                             }
                         }
@@ -307,7 +319,7 @@ struct IslandSummaryView: View {
             } else if groupingMode == .priority {
                 HStack(alignment: .top, spacing: 10) {
                     ForEach(TodoPriority.allCases) { priority in
-                        IslandPriorityColumn(priority: priority, items: wideItems(for: priority), groups: groups)
+                        IslandPriorityColumn(priority: priority, items: wideItems(for: priority), groups: groups, now: now)
                     }
                 }
                 .transition(.asymmetric(
@@ -326,7 +338,7 @@ struct IslandSummaryView: View {
                     ScrollView(.horizontal) {
                         HStack(alignment: .top, spacing: IslandWideGroupLayoutPolicy.columnSpacing) {
                             ForEach(visibleDisplayGroups) { displayGroup in
-                                IslandDisplayGroupColumn(displayGroup: displayGroup, groups: groups)
+                                IslandDisplayGroupColumn(displayGroup: displayGroup, groups: groups, now: now)
                                     .frame(width: columnWidth)
                             }
                         }
@@ -450,6 +462,7 @@ private struct IslandPriorityColumn: View {
     let priority: TodoPriority
     let items: [TodoItem]
     let groups: [TodoGroup]
+    let now: Date
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -477,7 +490,7 @@ private struct IslandPriorityColumn: View {
                 ScrollView(.vertical) {
                     VStack(spacing: 0) {
                         ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                            IslandTodoLine(item: item, groups: groups)
+                            IslandTodoLine(item: item, groups: groups, now: now)
 
                             if index < items.count - 1 {
                                 Divider()
@@ -505,6 +518,7 @@ private struct IslandPrioritySection: View {
     let priority: TodoPriority
     let items: [TodoItem]
     let groups: [TodoGroup]
+    let now: Date
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -526,7 +540,7 @@ private struct IslandPrioritySection: View {
             }
             .foregroundStyle(priority.islandColor)
 
-            IslandTodoLineList(items: items, groups: groups)
+            IslandTodoLineList(items: items, groups: groups, now: now)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
@@ -541,9 +555,10 @@ private struct IslandPrioritySection: View {
 private struct IslandDisplayGroupColumn: View {
     let displayGroup: TodoDisplayGroup
     let groups: [TodoGroup]
+    let now: Date
 
     var body: some View {
-        IslandDisplayGroupSection(displayGroup: displayGroup, groups: groups)
+        IslandDisplayGroupSection(displayGroup: displayGroup, groups: groups, now: now)
             .frame(maxHeight: .infinity, alignment: .top)
     }
 }
@@ -551,6 +566,7 @@ private struct IslandDisplayGroupColumn: View {
 private struct IslandDisplayGroupSection: View {
     let displayGroup: TodoDisplayGroup
     let groups: [TodoGroup]
+    let now: Date
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -573,7 +589,7 @@ private struct IslandDisplayGroupSection: View {
             }
             .foregroundStyle(displayGroup.group.color)
 
-            IslandTodoLineList(items: displayGroup.items, groups: groups)
+            IslandTodoLineList(items: displayGroup.items, groups: groups, now: now)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
@@ -588,11 +604,12 @@ private struct IslandDisplayGroupSection: View {
 private struct IslandTodoLineList: View {
     let items: [TodoItem]
     let groups: [TodoGroup]
+    let now: Date
 
     var body: some View {
         VStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                IslandTodoLine(item: item, groups: groups)
+                IslandTodoLine(item: item, groups: groups, now: now)
 
                 if index < items.count - 1 {
                     Divider()
@@ -607,6 +624,7 @@ private struct IslandTodoLineList: View {
 private struct IslandTodoLine: View {
     @Bindable var item: TodoItem
     let groups: [TodoGroup]
+    let now: Date
 
     var body: some View {
         HStack(spacing: 10) {
@@ -635,11 +653,12 @@ private struct IslandTodoLine: View {
                     .lineLimit(1)
 
                 HStack(spacing: 6) {
-                    Text(TodoAgeFormatter.elapsedText(since: item.createdAt))
+                    Text(TodoAgeFormatter.elapsedText(since: item.createdAt, now: now))
                     Text(TodoGroupResolver.group(for: item, groups: groups).name)
-                    if let occurrence = item.nextOccurrence(), let scheduleText = TodoDeadlineFormatter.cardText(for: item) {
+                    if let occurrence = item.nextOccurrence(after: now),
+                       let scheduleText = TodoDeadlineFormatter.cardText(for: item, now: now) {
                         Text(scheduleText)
-                            .foregroundStyle(occurrence < Date() ? .red.opacity(0.92) : .white.opacity(IslandSummaryStyle.tertiaryTextOpacity))
+                            .foregroundStyle(occurrence < now ? .red.opacity(0.92) : .white.opacity(IslandSummaryStyle.tertiaryTextOpacity))
                     }
                 }
                 .font(.caption2.weight(.medium))

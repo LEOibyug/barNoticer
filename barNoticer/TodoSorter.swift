@@ -47,8 +47,8 @@ enum TodoSorter {
         }
     }
 
-    static func priorityGroups(_ items: [TodoItem]) -> [TodoPriorityGroup] {
-        let sortedItems = sorted(items)
+    static func priorityGroups(_ items: [TodoItem], now: Date = Date()) -> [TodoPriorityGroup] {
+        let sortedItems = sorted(items, now: now)
 
         return TodoPriority.allCases.compactMap { priority in
             let priorityItems = sortedItems.filter { $0.priority == priority }

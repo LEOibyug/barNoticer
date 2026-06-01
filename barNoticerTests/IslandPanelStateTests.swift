@@ -17,6 +17,10 @@ final class IslandPanelStateTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(IslandSummaryStyle.itemBackgroundOpacity, 0.1)
     }
 
+    func testIslandSummaryRefreshesRelativeTimeEveryMinute() {
+        XCTAssertLessThanOrEqual(IslandSummaryRefreshPolicy.timelineInterval, 60)
+    }
+
     func testRepeatedShowWhileOpeningDoesNotRestartTransition() {
         var state = IslandPanelState()
 
