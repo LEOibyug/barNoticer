@@ -28,13 +28,44 @@ final class IslandPanelStateTests: XCTestCase {
         XCTAssertNil(state.beginShowing())
     }
 
-    func testShowCanStartAfterHiddenOrClosing() {
+    func testShowCannotInterruptClosingTransition() {
         var state = IslandPanelState()
 
         XCTAssertNotNil(state.beginShowing())
         state.beginHiding()
 
-        XCTAssertNotNil(state.beginShowing())
+        XCTAssertNil(state.beginShowing())
+    }
+
+    func testHideSuppressesShowingUntilCooldownExpires() throws {
+        var state = IslandPanelState()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let showTransition = try XCTUnwrap(state.beginShowing(now: startedAt))
+        XCTAssertTrue(state.finishShowing(showTransition))
+        let hideTransition = state.beginHiding(now: startedAt.addingTimeInterval(1), suppressShowingDuration: 0.7)
+        XCTAssertTrue(state.finishHiding(hideTransition))
+
+        XCTAssertNil(state.beginShowing(now: startedAt.addingTimeInterval(1.6)))
+        XCTAssertNotNil(state.beginShowing(now: startedAt.addingTimeInterval(1.71)))
+    }
+
+    func testClosingUsesCollapsedHitTestingUntilAnimationFinishes() {
+        var state = IslandPanelState()
+
+        XCTAssertFalse(state.shouldUseCollapsedHitTesting)
+        state.beginHiding()
+
+        XCTAssertTrue(state.shouldUseCollapsedHitTesting)
+    }
+
+    func testClosingStateIsExposedToPreventTransitionInterruption() {
+        var state = IslandPanelState()
+
+        XCTAssertFalse(state.isClosing)
+        state.beginHiding()
+
+        XCTAssertTrue(state.isClosing)
     }
 
     func testStaleHideCompletionDoesNotOverrideNewShowTransition() throws {
@@ -42,10 +73,9 @@ final class IslandPanelStateTests: XCTestCase {
 
         _ = state.beginShowing()
         let hideTransition = state.beginHiding()
-        let showTransition = try XCTUnwrap(state.beginShowing())
 
-        XCTAssertFalse(state.finishHiding(hideTransition))
-        XCTAssertTrue(state.finishShowing(showTransition))
+        XCTAssertNil(state.beginShowing())
+        XCTAssertTrue(state.finishHiding(hideTransition))
     }
 
     func testStaleShowCompletionDoesNotOverrideHideTransition() throws {
@@ -78,6 +108,19 @@ final class IslandPanelStateTests: XCTestCase {
         state.recoverIfTransitionTimedOut(now: startedAt.addingTimeInterval(4), timeout: 2)
 
         XCTAssertNotNil(state.beginShowing())
+    }
+
+    func testInvisiblePanelDoesNotClearClosingTransitionBeforeCompletion() throws {
+        var state = IslandPanelState()
+
+        let transition = try XCTUnwrap(state.beginShowing())
+        XCTAssertTrue(state.finishShowing(transition))
+        _ = state.beginHiding()
+
+        state.reconcile(isPanelVisible: false)
+
+        XCTAssertTrue(state.isClosing)
+        XCTAssertNil(state.beginShowing())
     }
 
     func testInvisiblePanelReconcilesShownStateToHidden() throws {

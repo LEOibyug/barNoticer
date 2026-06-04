@@ -128,6 +128,8 @@ final class NotchIslandController: NSObject {
     private func hideIslandIfPointerOutside() {
         hideWorkItem = nil
         guard let islandPanel else { return }
+        guard !panelState.shouldUseCollapsedHitTesting else { return }
+
         let mouseLocation = NSEvent.mouseLocation
         let decision = IslandAutoHidePolicy.decision(
             pointerInIsland: islandPanel.frame.contains(mouseLocation),
@@ -144,7 +146,7 @@ final class NotchIslandController: NSObject {
             islandPanel.makeFirstResponder(nil)
         }
 
-        let transition = panelState.beginHiding()
+        let transition = panelState.beginHiding(suppressShowingDuration: hideAnimation.duration + hideInterruptionSuppression)
         let plan = expansionPlan()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = hideAnimation.duration
@@ -242,7 +244,8 @@ final class NotchIslandController: NSObject {
 
         let mouseLocation = NSEvent.mouseLocation
         let pointerInHotZone = hotZoneFrame().contains(mouseLocation)
-        let pointerInIsland = islandPanel?.isVisible == true && islandPanel?.frame.contains(mouseLocation) == true
+        let pointerInIslandFrame = panelState.shouldUseCollapsedHitTesting ? collapsedIslandFrame() : islandPanel?.frame
+        let pointerInIsland = islandPanel?.isVisible == true && pointerInIslandFrame?.contains(mouseLocation) == true
 
         if pointerInHotZone {
             isPointerInHotZone = true
@@ -410,6 +413,7 @@ private struct IslandAnimation {
 }
 
 private let islandTransitionRecoveryTimeout: TimeInterval = 2.0
+private let hideInterruptionSuppression: TimeInterval = 0.3
 
 enum IslandPanelPresentation {
     static let collectionBehavior: NSWindow.CollectionBehavior = [

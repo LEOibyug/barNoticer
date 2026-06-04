@@ -16,15 +16,28 @@ struct IslandPanelState {
     private var nextTransitionID = 0
     private var activeTransition: Transition?
     private var transitionStartedAt: Date?
+    private var suppressShowingUntil: Date?
+
+    var isClosing: Bool {
+        phase == .closing
+    }
+
+    var shouldUseCollapsedHitTesting: Bool {
+        isClosing
+    }
 
     mutating func beginShowing(now: Date = Date()) -> Transition? {
+        if let suppressShowingUntil, now < suppressShowingUntil {
+            return nil
+        }
+
         switch phase {
-        case .hidden, .closing:
+        case .hidden:
             let transition = nextTransition(now: now)
             phase = .opening
             activeTransition = transition
             return transition
-        case .opening, .shown:
+        case .opening, .shown, .closing:
             return nil
         }
     }
@@ -43,10 +56,11 @@ struct IslandPanelState {
         activeTransition == transition
     }
 
-    mutating func beginHiding(now: Date = Date()) -> Transition {
+    mutating func beginHiding(now: Date = Date(), suppressShowingDuration: TimeInterval = 0) -> Transition {
         let transition = nextTransition(now: now)
         phase = .closing
         activeTransition = transition
+        suppressShowingUntil = suppressShowingDuration > 0 ? now.addingTimeInterval(suppressShowingDuration) : nil
         return transition
     }
 
@@ -70,6 +84,7 @@ struct IslandPanelState {
             phase = .hidden
             activeTransition = nil
             self.transitionStartedAt = nil
+            suppressShowingUntil = nil
         case .hidden, .shown:
             return
         }
@@ -79,11 +94,12 @@ struct IslandPanelState {
         guard !isPanelVisible else { return }
 
         switch phase {
-        case .opening, .shown, .closing:
+        case .opening, .shown:
             phase = .hidden
             activeTransition = nil
             transitionStartedAt = nil
-        case .hidden:
+            suppressShowingUntil = nil
+        case .hidden, .closing:
             return
         }
     }
