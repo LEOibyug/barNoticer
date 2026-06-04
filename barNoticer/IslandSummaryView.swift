@@ -340,9 +340,10 @@ struct IslandSummaryView: View {
                             ForEach(visibleDisplayGroups) { displayGroup in
                                 IslandDisplayGroupColumn(displayGroup: displayGroup, groups: groups, now: now)
                                     .frame(width: columnWidth)
+                                    .frame(maxHeight: .infinity)
                             }
                         }
-                        .frame(width: contentWidth, alignment: .leading)
+                        .frame(width: contentWidth, height: proxy.size.height, alignment: .topLeading)
                         .padding(.horizontal, 1)
                     }
                     .scrollIndicators(.never)
@@ -437,6 +438,7 @@ enum IslandGroupingMode: String, CaseIterable, Identifiable {
 enum IslandWideGroupLayoutPolicy {
     static let maxVisibleColumns = 3
     static let columnSpacing: CGFloat = 10
+    static let allowsVerticalColumnScroll = true
 
     static func needsHorizontalScroll(groupCount: Int) -> Bool {
         groupCount > maxVisibleColumns
@@ -558,7 +560,7 @@ private struct IslandDisplayGroupColumn: View {
     let now: Date
 
     var body: some View {
-        IslandDisplayGroupSection(displayGroup: displayGroup, groups: groups, now: now)
+        IslandDisplayGroupSection(displayGroup: displayGroup, groups: groups, now: now, allowsVerticalScroll: IslandWideGroupLayoutPolicy.allowsVerticalColumnScroll)
             .frame(maxHeight: .infinity, alignment: .top)
     }
 }
@@ -567,6 +569,7 @@ private struct IslandDisplayGroupSection: View {
     let displayGroup: TodoDisplayGroup
     let groups: [TodoGroup]
     let now: Date
+    var allowsVerticalScroll = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -589,10 +592,19 @@ private struct IslandDisplayGroupSection: View {
             }
             .foregroundStyle(displayGroup.group.color)
 
-            IslandTodoLineList(items: displayGroup.items, groups: groups, now: now)
+            if allowsVerticalScroll {
+                ScrollView(.vertical) {
+                    IslandTodoLineList(items: displayGroup.items, groups: groups, now: now)
+                }
+                .scrollIndicators(.never)
+                .frame(maxHeight: .infinity, alignment: .top)
+            } else {
+                IslandTodoLineList(items: displayGroup.items, groups: groups, now: now)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
+        .frame(maxHeight: .infinity, alignment: .top)
         .background(.white.opacity(IslandSummaryStyle.itemBackgroundOpacity), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 13, style: .continuous)

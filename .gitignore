@@ -36,6 +36,7 @@ Package.resolved
 Logs/
 
 # Editor and tooling
+.codegraph/
 .vscode/
 .idea/
 *.swp

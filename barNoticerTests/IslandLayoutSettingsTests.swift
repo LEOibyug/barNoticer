@@ -174,6 +174,10 @@ final class IslandLayoutSettingsTests: XCTestCase {
         XCTAssertTrue(IslandWideGroupLayoutPolicy.needsHorizontalScroll(groupCount: 4))
     }
 
+    func testWideGroupColumnsScrollVerticallyWhenContentOverflows() {
+        XCTAssertTrue(IslandWideGroupLayoutPolicy.allowsVerticalColumnScroll)
+    }
+
     func testWideGroupLayoutUsesThreeBalancedColumnSlots() {
         let availableWidth: CGFloat = 1140
 
