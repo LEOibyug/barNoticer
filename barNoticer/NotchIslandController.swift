@@ -62,11 +62,13 @@ final class NotchIslandController: NSObject {
     }
 
     func start() {
-        installIslandPanel()
         startPointerPolling()
     }
 
     func showIsland() {
+        if islandPanel == nil {
+            installIslandPanel()
+        }
         guard let islandPanel else { return }
         panelState.recoverIfTransitionTimedOut(timeout: islandTransitionRecoveryTimeout)
         panelState.reconcile(isPanelVisible: islandPanel.isVisible)
@@ -159,6 +161,9 @@ final class NotchIslandController: NSObject {
                 islandPanel.orderOut(nil)
                 islandPanel.setFrame(plan.endFrame, display: false)
                 self.setIslandContentVisibility(true)
+                if islandPanel === self.islandPanel {
+                    self.islandPanel = nil
+                }
             }
         }
     }
@@ -235,9 +240,6 @@ final class NotchIslandController: NSObject {
 
     private func pollPointerLocation() {
         guard !isPreviewingIsland else { return }
-        if islandPanel == nil {
-            installIslandPanel()
-        }
         if pointerPollTimer?.isValid != true {
             startPointerPolling()
         }
