@@ -202,13 +202,13 @@ final class AIConversationTests: XCTestCase {
 
     func testInlineTodoContextIncludesRecurringScheduleFields() {
         let anchor = Date(timeIntervalSince1970: 1_700_000_000)
-        let item = TodoItem(title: "每日复盘", priority: .medium, recurrenceRule: .daily, recurrenceAnchor: anchor)
+        let item = TodoItem(title: "隔三天复盘", priority: .medium, recurrenceRule: .everyNDays(3), recurrenceAnchor: anchor)
         let snapshot = AITodoContext.snapshot(items: [item], groups: [], now: anchor.addingTimeInterval(60))
 
         let context = snapshot.inlineContext(now: anchor.addingTimeInterval(60)).content
 
         XCTAssertTrue(context.contains("scheduleKind=recurring"))
-        XCTAssertTrue(context.contains("recurrenceRule=daily"))
+        XCTAssertTrue(context.contains("recurrenceRule=every_n_days:3"))
         XCTAssertTrue(context.contains("recurrenceAnchor="))
         XCTAssertTrue(context.contains("nextOccurrenceAt="))
     }

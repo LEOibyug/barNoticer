@@ -225,6 +225,31 @@ final class AITodoToolTests: XCTestCase {
     }
 
     @MainActor
+    func testCreateTodoToolAcceptsCustomDailyRecurrence() throws {
+        let container = try ModelContainer(
+            for: TodoItem.self, TodoGroup.self, DailySummary.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let executor = AIToolExecutor(modelContext: container.mainContext)
+        let call = AIToolCall(
+            id: "create-custom-recurrence-call",
+            type: "function",
+            function: .init(
+                name: "create_todo",
+                arguments: #"{"title":"隔三天训练","priority":"medium","recurrence_rule":"every_n_days","recurrence_interval_days":3,"recurrence_anchor":"2026-05-24T09:00:00Z"}"#
+            )
+        )
+
+        let result = try executor.handle(call)
+
+        guard case let .proposal(.createTodo(_, _, _, _, _, _, recurrenceRule, recurrenceAnchor)) = result else {
+            return XCTFail("Expected scheduled create todo proposal")
+        }
+        XCTAssertEqual(recurrenceRule, .everyNDays(3))
+        XCTAssertEqual(recurrenceAnchor, ISO8601DateFormatter().date(from: "2026-05-24T09:00:00Z"))
+    }
+
+    @MainActor
     func testRecurringTodoCompletionProposalRollsForwardInsteadOfCompleting() throws {
         let container = try ModelContainer(
             for: TodoItem.self, TodoGroup.self, DailySummary.self,

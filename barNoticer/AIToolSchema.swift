@@ -76,8 +76,9 @@ enum AIToolSchema {
                 "group_id": .object(["type": .string("string")]),
                 "deadline_at": .object(["type": .string("string"), "description": .string("ISO8601 单次截止时间。用户说今天/明天/下周三时，先结合当前日期时间解析成明确 ISO8601。")]),
                 "scheduled_times": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("一次性多个时间点，ISO8601 字符串数组。展示和提醒只使用最近一个未到来的时间点。")]),
-                "recurrence_rule": .object(["type": .string("string"), "enum": .array([.string("daily"), .string("weekly"), .string("monthly")]), "description": .string("重复事项规则。")]),
-                "recurrence_anchor": .object(["type": .string("string"), "description": .string("重复事项起始时间，ISO8601。每天/每周/每月都从该时间推导下一次。")])
+                "recurrence_rule": .object(["type": .string("string"), "enum": .array([.string("daily"), .string("weekly"), .string("monthly"), .string("every_n_days")]), "description": .string("重复事项规则。用户说每 N 天时使用 every_n_days，并同时填写 recurrence_interval_days。")]),
+                "recurrence_interval_days": .object(["type": .string("integer"), "minimum": .number(1), "description": .string("仅 recurrence_rule=every_n_days 时填写，表示每 N 天重复。")]),
+                "recurrence_anchor": .object(["type": .string("string"), "description": .string("重复事项起始时间，ISO8601。每天/每周/每月/每 N 天都从该时间推导下一次。")])
             ],
             required: ["title", "priority"]
         ),
@@ -91,7 +92,8 @@ enum AIToolSchema {
                 "group_id": .object(["type": .string("string")]),
                 "deadline_at": .object(["type": .string("string"), "description": .string("ISO8601 单次截止时间")]),
                 "scheduled_times": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("一次性多个时间点，ISO8601 字符串数组。")]),
-                "recurrence_rule": .object(["type": .string("string"), "enum": .array([.string("daily"), .string("weekly"), .string("monthly")])]),
+                "recurrence_rule": .object(["type": .string("string"), "enum": .array([.string("daily"), .string("weekly"), .string("monthly"), .string("every_n_days")])]),
+                "recurrence_interval_days": .object(["type": .string("integer"), "minimum": .number(1), "description": .string("仅 recurrence_rule=every_n_days 时填写，表示每 N 天重复。")]),
                 "recurrence_anchor": .object(["type": .string("string"), "description": .string("重复事项起始时间，ISO8601。")]),
                 "clear_deadline": .object(["type": .string("boolean")]),
                 "clear_schedule": .object(["type": .string("boolean"), "description": .string("清除所有时间计划，包括 DDL、多时间点和重复规则。")])

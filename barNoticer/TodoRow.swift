@@ -13,22 +13,22 @@ struct TodoRow: View {
     @State private var firstScheduledTime = Date().addingTimeInterval(3_600)
     @State private var secondScheduledTime = Date().addingTimeInterval(7_200)
     @State private var recurrenceRule = TodoRecurrenceRule.daily
+    @State private var customRecurrenceDays = 2
     @State private var recurrenceAnchor = Date().addingTimeInterval(3_600)
+    @State private var isShowingSettings = false
     @FocusState private var isTitleFocused: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: 14) {
             completionButton
             VStack(alignment: .leading, spacing: 4) {
                 titleField
                 metadata
             }
-            groupPicker
-            priorityPicker
-            scheduleEditor
-            deleteButton
+            .frame(maxWidth: .infinity, alignment: .leading)
+            settingsButton
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
         .onAppear {
             syncDeadlineState()
             syncTitleState()
@@ -44,6 +44,9 @@ struct TodoRow: View {
         }
         .onChange(of: item.updatedAt) { _, _ in
             syncDeadlineState()
+        }
+        .sheet(isPresented: $isShowingSettings) {
+            settingsSheet
         }
     }
 
@@ -77,110 +80,243 @@ struct TodoRow: View {
             }
     }
 
-    private var priorityPicker: some View {
-        Picker("优先级", selection: Binding(
-            get: { item.priority },
-            set: { item.priority = $0 }
-        )) {
-            ForEach(TodoPriority.allCases) { priority in
-                Label(priority.title, systemImage: priority.systemImage)
-                    .tag(priority)
-            }
+    private var settingsButton: some View {
+        Button {
+            syncDeadlineState()
+            syncTitleState()
+            isShowingSettings = true
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 15, weight: .medium))
         }
-        .pickerStyle(.menu)
-        .frame(width: 86)
-        .tint(item.priority.color)
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .help("设置事项")
     }
 
-    private var groupPicker: some View {
-        Picker("分组", selection: Binding(
-            get: { item.groupID ?? TodoGroup.defaultGroupID },
-            set: { item.updateGroup($0) }
-        )) {
-            ForEach(groups) { group in
-                Text(group.name).tag(group.id)
+    private var settingsSheet: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("事项设置")
+                        .font(.title3.weight(.semibold))
+                    Text(item.title)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                Button {
+                    isShowingSettings = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("关闭")
             }
+            .padding(.horizontal, 22)
+            .padding(.top, 20)
+            .padding(.bottom, 14)
+
+            Divider()
+
+            Form {
+                Section("基础信息") {
+                    TextField("待办标题", text: $editedTitle)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit(commitTitle)
+                        .onDisappear {
+                            commitTitle()
+                        }
+
+                    Picker("分组", selection: Binding(
+                        get: { item.groupID ?? TodoGroup.defaultGroupID },
+                        set: { item.updateGroup($0) }
+                    )) {
+                        ForEach(groups) { group in
+                            Text(group.name).tag(group.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    Picker("优先级", selection: Binding(
+                        get: { item.priority },
+                        set: { item.priority = $0 }
+                    )) {
+                        ForEach(TodoPriority.allCases) { priority in
+                            Label(priority.title, systemImage: priority.systemImage)
+                                .tag(priority)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                Section("时间计划") {
+                    scheduleEditor
+                }
+
+                Section {
+                    HStack {
+                        Button(role: .destructive) {
+                            modelContext.delete(item)
+                            isShowingSettings = false
+                        } label: {
+                            Label("删除事项", systemImage: "trash")
+                        }
+
+                        Spacer()
+
+                        Button("完成") {
+                            commitTitle()
+                            isShowingSettings = false
+                        }
+                        .keyboardShortcut(.defaultAction)
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 12)
         }
-        .pickerStyle(.menu)
-        .frame(width: 104)
+        .frame(width: 430)
+        .presentationSizing(.fitted)
+        .onAppear {
+            syncDeadlineState()
+            syncTitleState()
+        }
     }
 
     private var scheduleEditor: some View {
-        HStack(spacing: 6) {
-            Picker("时间", selection: Binding(
-                get: { editedScheduleKind },
-                set: { kind in
-                    editedScheduleKind = kind
-                    applyScheduleEditor()
-                }
-            )) {
-                Text("无时间").tag(TodoScheduleKind.none)
-                Text("DDL").tag(TodoScheduleKind.singleDeadline)
-                Text("多时间").tag(TodoScheduleKind.multipleTimes)
-                Text("重复").tag(TodoScheduleKind.recurring)
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
+            GridRow {
+                Text("类型")
+                    .foregroundStyle(.secondary)
+                scheduleKindPicker
             }
-            .pickerStyle(.menu)
-            .frame(width: 86)
 
             switch editedScheduleKind {
             case .none:
                 EmptyView()
             case .singleDeadline:
-                DatePicker("", selection: Binding(
-                    get: { editedDeadline },
-                    set: { date in
-                        editedDeadline = date
-                        applyScheduleEditor()
-                    }
-                ), displayedComponents: [.date, .hourAndMinute])
-                .labelsHidden()
-                .frame(width: 156)
+                GridRow {
+                    Text("DDL")
+                        .foregroundStyle(.secondary)
+                    DatePicker("", selection: Binding(
+                        get: { editedDeadline },
+                        set: { date in
+                            editedDeadline = date
+                            applyScheduleEditor()
+                        }
+                    ), displayedComponents: [.date, .hourAndMinute])
+                    .labelsHidden()
+                }
             case .multipleTimes:
-                DatePicker("", selection: Binding(
-                    get: { firstScheduledTime },
-                    set: { date in
-                        firstScheduledTime = date
-                        applyScheduleEditor()
-                    }
-                ), displayedComponents: [.date, .hourAndMinute])
-                .labelsHidden()
-                .frame(width: 132)
+                GridRow {
+                    Text("时间 1")
+                        .foregroundStyle(.secondary)
+                    DatePicker("", selection: Binding(
+                        get: { firstScheduledTime },
+                        set: { date in
+                            firstScheduledTime = date
+                            applyScheduleEditor()
+                        }
+                    ), displayedComponents: [.date, .hourAndMinute])
+                    .labelsHidden()
+                }
 
-                DatePicker("", selection: Binding(
-                    get: { secondScheduledTime },
-                    set: { date in
-                        secondScheduledTime = date
-                        applyScheduleEditor()
-                    }
-                ), displayedComponents: [.date, .hourAndMinute])
-                .labelsHidden()
-                .frame(width: 132)
+                GridRow {
+                    Text("时间 2")
+                        .foregroundStyle(.secondary)
+                    DatePicker("", selection: Binding(
+                        get: { secondScheduledTime },
+                        set: { date in
+                            secondScheduledTime = date
+                            applyScheduleEditor()
+                        }
+                    ), displayedComponents: [.date, .hourAndMinute])
+                    .labelsHidden()
+                }
             case .recurring:
-                Picker("重复", selection: Binding(
-                    get: { recurrenceRule },
-                    set: { rule in
-                        recurrenceRule = rule
-                        applyScheduleEditor()
-                    }
-                )) {
-                    ForEach(TodoRecurrenceRule.allCases) { rule in
-                        Text(rule.title).tag(rule)
+                GridRow {
+                    Text("周期")
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        recurrencePicker
+                        if case .everyNDays = recurrenceRule {
+                            Stepper(
+                                value: Binding(
+                                    get: { customRecurrenceDays },
+                                    set: { days in
+                                        customRecurrenceDays = max(1, days)
+                                        recurrenceRule = .everyNDays(customRecurrenceDays)
+                                        applyScheduleEditor()
+                                    }
+                                ),
+                                in: 1...365
+                            ) {
+                                Text("\(customRecurrenceDays)天")
+                                    .frame(width: 44, alignment: .leading)
+                            }
+                        }
                     }
                 }
-                .pickerStyle(.menu)
-                .frame(width: 76)
 
-                DatePicker("", selection: Binding(
-                    get: { recurrenceAnchor },
-                    set: { date in
-                        recurrenceAnchor = date
-                        applyScheduleEditor()
-                    }
-                ), displayedComponents: [.date, .hourAndMinute])
-                .labelsHidden()
-                .frame(width: 132)
+                GridRow {
+                    Text("开始")
+                        .foregroundStyle(.secondary)
+                    DatePicker("", selection: Binding(
+                        get: { recurrenceAnchor },
+                        set: { date in
+                            recurrenceAnchor = date
+                            applyScheduleEditor()
+                        }
+                    ), displayedComponents: [.date, .hourAndMinute])
+                    .labelsHidden()
+                }
             }
         }
+    }
+
+    private var scheduleKindPicker: some View {
+        Picker("时间", selection: Binding(
+            get: { editedScheduleKind },
+            set: { kind in
+                editedScheduleKind = kind
+                applyScheduleEditor()
+            }
+        )) {
+            Text("无时间").tag(TodoScheduleKind.none)
+            Text("单次 DDL").tag(TodoScheduleKind.singleDeadline)
+            Text("多个时间点").tag(TodoScheduleKind.multipleTimes)
+            Text("重复事项").tag(TodoScheduleKind.recurring)
+        }
+        .pickerStyle(.menu)
+        .frame(width: 150, alignment: .leading)
+    }
+
+    private var recurrencePicker: some View {
+        Picker("重复", selection: Binding(
+            get: { recurrenceRule },
+            set: { rule in
+                recurrenceRule = rule
+                if let days = rule.intervalDays {
+                    customRecurrenceDays = days
+                }
+                applyScheduleEditor()
+            }
+        )) {
+            ForEach(recurrencePickerRules) { rule in
+                Text(rule.title).tag(rule)
+            }
+        }
+        .pickerStyle(.menu)
+        .frame(width: 118, alignment: .leading)
     }
 
     private var metadata: some View {
@@ -197,14 +333,8 @@ struct TodoRow: View {
         .lineLimit(1)
     }
 
-    private var deleteButton: some View {
-        Button(role: .destructive) {
-            modelContext.delete(item)
-        } label: {
-            Image(systemName: "trash")
-        }
-        .buttonStyle(.borderless)
-        .help("删除")
+    private var recurrencePickerRules: [TodoRecurrenceRule] {
+        [.daily, .weekly, .monthly, .everyNDays(customRecurrenceDays)]
     }
 
     private func commitTitle() {
@@ -234,6 +364,7 @@ struct TodoRow: View {
             secondScheduledTime = first.addingTimeInterval(3_600)
         }
         recurrenceRule = item.recurrenceRule ?? .daily
+        customRecurrenceDays = item.recurrenceRule?.intervalDays ?? customRecurrenceDays
         recurrenceAnchor = item.recurrenceAnchor ?? item.nextOccurrence() ?? Date().addingTimeInterval(3_600)
     }
 

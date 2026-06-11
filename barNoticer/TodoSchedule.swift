@@ -22,12 +22,46 @@ enum TodoScheduleKind: String, CaseIterable, Codable, Equatable, Identifiable {
     }
 }
 
-enum TodoRecurrenceRule: String, CaseIterable, Codable, Equatable, Identifiable {
+enum TodoRecurrenceRule: Codable, Equatable, Hashable, Identifiable {
     case daily
     case weekly
     case monthly
+    case everyNDays(Int)
 
     var id: String { rawValue }
+
+    var rawValue: String {
+        switch self {
+        case .daily:
+            return "daily"
+        case .weekly:
+            return "weekly"
+        case .monthly:
+            return "monthly"
+        case let .everyNDays(days):
+            return "every_n_days:\(max(1, days))"
+        }
+    }
+
+    init?(rawValue: String) {
+        switch rawValue {
+        case "daily":
+            self = .daily
+        case "weekly":
+            self = .weekly
+        case "monthly":
+            self = .monthly
+        default:
+            let prefix = "every_n_days:"
+            guard rawValue.hasPrefix(prefix),
+                  let days = Int(rawValue.dropFirst(prefix.count)),
+                  days > 0
+            else {
+                return nil
+            }
+            self = .everyNDays(days)
+        }
+    }
 
     var title: String {
         switch self {
@@ -37,7 +71,30 @@ enum TodoRecurrenceRule: String, CaseIterable, Codable, Equatable, Identifiable 
             return "每周"
         case .monthly:
             return "每月"
+        case let .everyNDays(days):
+            return "每\(days)天"
         }
+    }
+
+    var intervalDays: Int? {
+        if case let .everyNDays(days) = self {
+            return days
+        }
+        return nil
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        guard let rule = TodoRecurrenceRule(rawValue: rawValue) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unsupported recurrence rule: \(rawValue)")
+        }
+        self = rule
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
     }
 }
 
@@ -101,6 +158,8 @@ enum TodoSchedulePolicy {
             return calendar.date(byAdding: .weekOfYear, value: 1, to: date) ?? date.addingTimeInterval(7 * 86_400)
         case .monthly:
             return nextMonthlyDate(after: date, preservingDayFrom: anchor, calendar: calendar)
+        case let .everyNDays(days):
+            return calendar.date(byAdding: .day, value: max(1, days), to: date) ?? date.addingTimeInterval(TimeInterval(max(1, days)) * 86_400)
         }
     }
 

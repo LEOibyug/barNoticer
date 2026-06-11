@@ -48,7 +48,7 @@ final class AIToolExecutor {
                 groupID: arguments.optionalUUID("group_id"),
                 deadlineAt: arguments.optionalDate("deadline_at"),
                 scheduledTimes: arguments.optionalDates("scheduled_times"),
-                recurrenceRule: arguments.optionalRecurrenceRule("recurrence_rule"),
+                recurrenceRule: arguments.optionalRecurrenceRule("recurrence_rule", intervalDaysKey: "recurrence_interval_days"),
                 recurrenceAnchor: arguments.optionalDate("recurrence_anchor")
             ))
         case "update_todo":
@@ -59,7 +59,7 @@ final class AIToolExecutor {
                 groupID: arguments.optionalUUID("group_id"),
                 deadlineAt: arguments.optionalDate("deadline_at"),
                 scheduledTimes: arguments.optionalDates("scheduled_times"),
-                recurrenceRule: arguments.optionalRecurrenceRule("recurrence_rule"),
+                recurrenceRule: arguments.optionalRecurrenceRule("recurrence_rule", intervalDaysKey: "recurrence_interval_days"),
                 recurrenceAnchor: arguments.optionalDate("recurrence_anchor"),
                 clearsDeadline: arguments.optionalBool("clear_deadline") ?? false,
                 clearsSchedule: arguments.optionalBool("clear_schedule") ?? false
@@ -314,8 +314,12 @@ private struct ToolArguments {
         return TodoPriority(rawValue: value)
     }
 
-    func optionalRecurrenceRule(_ key: String) -> TodoRecurrenceRule? {
+    func optionalRecurrenceRule(_ key: String, intervalDaysKey: String) -> TodoRecurrenceRule? {
         guard let value = values[key] as? String else { return nil }
+        if value == "every_n_days" {
+            guard let days = optionalInt(intervalDaysKey), days > 0 else { return nil }
+            return .everyNDays(days)
+        }
         return TodoRecurrenceRule(rawValue: value)
     }
 }
