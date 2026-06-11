@@ -17,17 +17,38 @@ struct TodoRow: View {
     @State private var recurrenceAnchor = Date().addingTimeInterval(3_600)
     @State private var editedNote = ""
     @State private var isShowingSettings = false
+    @State private var isNoteExpanded = false
     @FocusState private var isTitleFocused: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            completionButton
-            VStack(alignment: .leading, spacing: 4) {
-                titleField
-                metadata
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 14) {
+                completionButton
+                VStack(alignment: .leading, spacing: 4) {
+                    titleField
+                    metadata
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                settingsButton
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            settingsButton
+
+            if isNoteExpanded, let noteText {
+                ScrollView(.vertical) {
+                    Text(noteText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineSpacing(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: 72, alignment: .top)
+                .padding(.leading, 32)
+                .padding(.trailing, 28)
+                .transition(.asymmetric(
+                    insertion: .opacity.combined(with: .move(edge: .top)),
+                    removal: .opacity
+                ))
+            }
         }
         .padding(.vertical, 8)
         .onAppear {
@@ -40,6 +61,7 @@ struct TodoRow: View {
             syncTitleState()
             syncNoteState()
             syncDeadlineState()
+            isNoteExpanded = false
         }
         .onChange(of: item.title) { _, newTitle in
             guard !isTitleFocused else { return }
@@ -47,6 +69,9 @@ struct TodoRow: View {
         }
         .onChange(of: item.updatedAt) { _, _ in
             syncDeadlineState()
+            if noteText == nil {
+                isNoteExpanded = false
+            }
         }
         .sheet(isPresented: $isShowingSettings) {
             settingsSheet
@@ -349,9 +374,18 @@ struct TodoRow: View {
         HStack(spacing: 8) {
             Text(TodoAgeFormatter.elapsedText(since: item.createdAt))
             Text(TodoGroupResolver.group(for: item, groups: groups).name)
-            if item.note?.isEmpty == false {
-                Label("有备注", systemImage: "note.text")
-                    .labelStyle(.iconOnly)
+            if noteText != nil {
+                Button {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                        isNoteExpanded.toggle()
+                    }
+                } label: {
+                    Label(isNoteExpanded ? "收起备注" : "查看备注", systemImage: isNoteExpanded ? "chevron.up" : "note.text")
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help(isNoteExpanded ? "收起备注" : "查看备注")
             }
             if let occurrence = item.nextOccurrence(), let scheduleText = TodoDeadlineFormatter.cardText(for: item) {
                 Text(scheduleText)
@@ -365,6 +399,13 @@ struct TodoRow: View {
 
     private var recurrencePickerRules: [TodoRecurrenceRule] {
         [.daily, .weekly, .monthly, .everyNDays(customRecurrenceDays)]
+    }
+
+    private var noteText: String? {
+        guard let note = item.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty else {
+            return nil
+        }
+        return note
     }
 
     private func commitTitle() {
