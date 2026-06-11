@@ -71,8 +71,8 @@ enum AIToolSchema {
             name: "create_todo",
             description: "提出新增待办事项。需要用户确认。",
             properties: [
-                "title": .object(["type": .string("string")]),
-                "note": .object(["type": .string("string"), "description": .string("可选备注。适合保存任务背景、要求、检查清单或用户补充说明；不要把备注重复写进标题。")]),
+                "title": .object(["type": .string("string"), "description": .string("事项标题。应短而具体，包含动作、对象和必要限定词；不能只写“处理一下”“看看”“跟进”等模糊标题。")]),
+                "note": .object(["type": .string("string"), "description": .string("可选备注。保存背景、原因、详细要求、验收标准、检查清单、上下文链接或长说明；不要把这些细节堆进标题。")]),
                 "priority": .object(["type": .string("string"), "enum": .array([.string("high"), .string("medium"), .string("low")])]),
                 "group_id": .object(["type": .string("string")]),
                 "deadline_at": .object(["type": .string("string"), "description": .string("ISO8601 单次截止时间。用户说今天/明天/下周三时，先结合当前日期时间解析成明确 ISO8601。")]),
@@ -88,8 +88,8 @@ enum AIToolSchema {
             description: "提出修改待办标题、重要性、分组或截止时间。需要用户确认。",
             properties: [
                 "id": .object(["type": .string("string")]),
-                "title": .object(["type": .string("string")]),
-                "note": .object(["type": .string("string"), "description": .string("修改事项备注；清空备注时使用 clear_note=true。")]),
+                "title": .object(["type": .string("string"), "description": .string("修改事项标题。应短而具体，保留动作、对象和必要限定词；不能改成过度模糊的标题。")]),
+                "note": .object(["type": .string("string"), "description": .string("修改事项备注。用于保存背景、详细要求、验收标准、检查清单、上下文链接或长说明；清空备注时使用 clear_note=true。")]),
                 "priority": .object(["type": .string("string"), "enum": .array([.string("high"), .string("medium"), .string("low")])]),
                 "group_id": .object(["type": .string("string")]),
                 "deadline_at": .object(["type": .string("string"), "description": .string("ISO8601 单次截止时间")]),
