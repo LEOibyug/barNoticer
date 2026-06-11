@@ -15,6 +15,7 @@ struct TodoRow: View {
     @State private var recurrenceRule = TodoRecurrenceRule.daily
     @State private var customRecurrenceDays = 2
     @State private var recurrenceAnchor = Date().addingTimeInterval(3_600)
+    @State private var editedNote = ""
     @State private var isShowingSettings = false
     @FocusState private var isTitleFocused: Bool
 
@@ -32,10 +33,12 @@ struct TodoRow: View {
         .onAppear {
             syncDeadlineState()
             syncTitleState()
+            syncNoteState()
         }
         .id(item.id)
         .onChange(of: item.id) { _, _ in
             syncTitleState()
+            syncNoteState()
             syncDeadlineState()
         }
         .onChange(of: item.title) { _, newTitle in
@@ -84,6 +87,7 @@ struct TodoRow: View {
         Button {
             syncDeadlineState()
             syncTitleState()
+            syncNoteState()
             isShowingSettings = true
         } label: {
             Image(systemName: "gearshape")
@@ -134,6 +138,26 @@ struct TodoRow: View {
                             commitTitle()
                         }
 
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("备注")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        TextEditor(text: $editedNote)
+                            .font(.body)
+                            .scrollContentBackground(.hidden)
+                            .frame(minHeight: 78, maxHeight: 96)
+                            .padding(7)
+                            .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(.quaternary, lineWidth: 1)
+                            }
+                            .onChange(of: editedNote) { _, newValue in
+                                item.updateNote(newValue)
+                            }
+                    }
+
                     Picker("分组", selection: Binding(
                         get: { item.groupID ?? TodoGroup.defaultGroupID },
                         set: { item.updateGroup($0) }
@@ -173,6 +197,7 @@ struct TodoRow: View {
 
                         Button("完成") {
                             commitTitle()
+                            commitNote()
                             isShowingSettings = false
                         }
                         .keyboardShortcut(.defaultAction)
@@ -189,6 +214,7 @@ struct TodoRow: View {
         .onAppear {
             syncDeadlineState()
             syncTitleState()
+            syncNoteState()
         }
     }
 
@@ -323,6 +349,10 @@ struct TodoRow: View {
         HStack(spacing: 8) {
             Text(TodoAgeFormatter.elapsedText(since: item.createdAt))
             Text(TodoGroupResolver.group(for: item, groups: groups).name)
+            if item.note?.isEmpty == false {
+                Label("有备注", systemImage: "note.text")
+                    .labelStyle(.iconOnly)
+            }
             if let occurrence = item.nextOccurrence(), let scheduleText = TodoDeadlineFormatter.cardText(for: item) {
                 Text(scheduleText)
                     .foregroundStyle(occurrence < Date() ? .red : .secondary)
@@ -349,6 +379,11 @@ struct TodoRow: View {
         }
     }
 
+    private func commitNote() {
+        item.updateNote(editedNote)
+        syncNoteState()
+    }
+
     private func syncDeadlineState() {
         editedScheduleKind = item.scheduleKind
         hasDeadline = item.hasSchedule
@@ -370,6 +405,10 @@ struct TodoRow: View {
 
     private func syncTitleState() {
         editedTitle = item.title
+    }
+
+    private func syncNoteState() {
+        editedNote = item.note ?? ""
     }
 
     private func applyScheduleEditor() {

@@ -22,8 +22,6 @@ struct IslandSummaryView: View {
 
     var openMainWindow: () -> Void = {}
 
-    @State private var quickAddDraft = IslandQuickAddDraft()
-    @State private var isComposingQuickAddText = false
     @State private var layoutVersion = 0
     @State private var now = Date()
     @AppStorage(IslandDisplayMode.storageKey) private var modeRawValue = IslandDisplayMode.standard.rawValue
@@ -95,7 +93,6 @@ struct IslandSummaryView: View {
 
             VStack(alignment: .leading, spacing: 11) {
                 header
-                quickAdd
                 Group {
                     if mode == .wide {
                         wideTodoContent
@@ -127,6 +124,7 @@ struct IslandSummaryView: View {
 
             Spacer()
 
+            createTodoButton
             groupingToggle
             modeToggle
 
@@ -140,6 +138,20 @@ struct IslandSummaryView: View {
                     .background(first.priority.islandColor.opacity(0.14), in: Capsule())
             }
         }
+    }
+
+    private var createTodoButton: some View {
+        Button {
+            NotificationCenter.default.post(name: TodoCreationSettings.showPanelNotification, object: nil)
+        } label: {
+            Image(systemName: "plus")
+                .font(.caption.weight(.semibold))
+                .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white.opacity(0.86))
+        .background(.white.opacity(0.1), in: Circle())
+        .help("新建事项")
     }
 
     private var modeToggle: some View {
@@ -173,98 +185,6 @@ struct IslandSummaryView: View {
         .foregroundStyle(.white.opacity(0.82))
         .background(.white.opacity(0.1), in: Circle())
         .help(groupingMode == .priority ? "按分类分组" : "按重要性分组")
-    }
-
-    private var quickAdd: some View {
-        HStack(spacing: 8) {
-            Menu {
-                ForEach(TodoPriority.allCases) { priority in
-                    Button {
-                        quickAddDraft.priority = priority
-                    } label: {
-                        Label(priority.title, systemImage: priority.systemImage)
-                    }
-                }
-            } label: {
-                Label(quickAddDraft.priority.title, systemImage: quickAddDraft.priority.systemImage)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(quickAddDraft.priority.islandColor)
-                    .labelStyle(.iconOnly)
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .frame(width: 26, height: 24)
-            .help("选择重要性")
-
-            ZStack(alignment: .leading) {
-                if PromptPlaceholderVisibility.shouldShowPlaceholder(
-                    text: quickAddDraft.title,
-                    isComposingText: isComposingQuickAddText
-                ) {
-                    Text("输入新待办，回车添加")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.72))
-                        .allowsHitTesting(false)
-                }
-
-                ComposingAwareTextField(
-                    text: $quickAddDraft.title,
-                    isComposingText: $isComposingQuickAddText,
-                    font: .systemFont(ofSize: 13, weight: .medium),
-                    textColor: .white,
-                    onSubmit: addTodo
-                )
-                .frame(height: 18)
-            }
-
-            Menu {
-                ForEach(groups) { group in
-                    Button {
-                        quickAddDraft.groupID = group.id
-                    } label: {
-                        Label(group.name, systemImage: "folder")
-                    }
-                }
-            } label: {
-                Image(systemName: "folder")
-                    .font(.caption.weight(.semibold))
-                    .frame(width: 22, height: 22)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .foregroundStyle(.white.opacity(0.82))
-            .help("选择分组")
-
-            Menu {
-                Button("无截止") {
-                    quickAddDraft.deadlineAt = nil
-                }
-                Button("今天晚些时候") {
-                    quickAddDraft.deadlineAt = Date().addingTimeInterval(3_600)
-                }
-                Button("明天") {
-                    quickAddDraft.deadlineAt = Date().addingTimeInterval(86_400)
-                }
-            } label: {
-                Image(systemName: quickAddDraft.deadlineAt == nil ? "calendar.badge.plus" : "calendar")
-                    .font(.caption.weight(.semibold))
-                    .frame(width: 22, height: 22)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .foregroundStyle(.white.opacity(0.82))
-            .help("设置截止时间")
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .frame(height: 34)
-        .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(.white.opacity(0.22), lineWidth: 1)
-        }
     }
 
     private var emptyState: some View {
@@ -383,24 +303,6 @@ struct IslandSummaryView: View {
         "顶部中央悬停可快速查看"
     }
 
-    private var trimmedDraftTitle: String {
-        quickAddDraft.trimmedTitle
-    }
-
-    private func addTodo() {
-        let title = trimmedDraftTitle
-        guard !title.isEmpty else { return }
-
-        modelContext.insert(TodoItem(
-            title: title,
-            priority: quickAddDraft.priority,
-            groupID: quickAddDraft.groupID,
-            deadlineAt: quickAddDraft.deadlineAt
-        ))
-        quickAddDraft.clearTitle()
-        isComposingQuickAddText = false
-    }
-
     private func wideItems(for priority: TodoPriority) -> [TodoItem] {
         IslandWideTodoPolicy.items(for: priority, from: activeItems)
     }
@@ -490,17 +392,7 @@ private struct IslandPriorityColumn: View {
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .center)
             } else {
                 ScrollView(.vertical) {
-                    VStack(spacing: 0) {
-                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                            IslandTodoLine(item: item, groups: groups, now: now)
-
-                            if index < items.count - 1 {
-                                Divider()
-                                    .overlay(.white.opacity(IslandSummaryStyle.dividerOpacity))
-                                    .padding(.leading, 29)
-                            }
-                        }
-                    }
+                    IslandTodoLineList(items: items, groups: groups, now: now)
                 }
                 .scrollIndicators(.never)
             }
@@ -617,11 +509,22 @@ private struct IslandTodoLineList: View {
     let items: [TodoItem]
     let groups: [TodoGroup]
     let now: Date
+    @State private var expandedItemID: UUID?
 
     var body: some View {
         VStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                IslandTodoLine(item: item, groups: groups, now: now)
+                IslandTodoLine(
+                    item: item,
+                    groups: groups,
+                    now: now,
+                    isExpanded: expandedItemID == item.id
+                ) {
+                    guard item.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { return }
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                        expandedItemID = expandedItemID == item.id ? nil : item.id
+                    }
+                }
 
                 if index < items.count - 1 {
                     Divider()
@@ -637,50 +540,89 @@ private struct IslandTodoLine: View {
     @Bindable var item: TodoItem
     let groups: [TodoGroup]
     let now: Date
+    let isExpanded: Bool
+    let toggleExpansion: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            Button {
-                if item.scheduleKind == .recurring {
-                    item.completeCurrentOccurrence()
-                } else {
-                    item.updateCompletion(true)
-                }
-            } label: {
-                Image(systemName: "circle")
-                    .font(.system(size: 15, weight: .medium))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white.opacity(0.72))
-            .help("完成")
-
-            Capsule()
-                .fill(item.priority.islandColor)
-                .frame(width: 4, height: 18)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.title)
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.92))
-                    .lineLimit(1)
-
-                HStack(spacing: 6) {
-                    Text(TodoAgeFormatter.elapsedText(since: item.createdAt, now: now))
-                    Text(TodoGroupResolver.group(for: item, groups: groups).name)
-                    if let occurrence = item.nextOccurrence(after: now),
-                       let scheduleText = TodoDeadlineFormatter.cardText(for: item, now: now) {
-                        Text(scheduleText)
-                            .foregroundStyle(occurrence < now ? .red.opacity(0.92) : .white.opacity(IslandSummaryStyle.tertiaryTextOpacity))
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 10) {
+                Button {
+                    if item.scheduleKind == .recurring {
+                        item.completeCurrentOccurrence()
+                    } else {
+                        item.updateCompletion(true)
                     }
+                } label: {
+                    Image(systemName: "circle")
+                        .font(.system(size: 15, weight: .medium))
                 }
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.white.opacity(IslandSummaryStyle.tertiaryTextOpacity))
-                .lineLimit(1)
+                .buttonStyle(.plain)
+                .foregroundStyle(.white.opacity(0.72))
+                .help("完成")
+
+                Capsule()
+                    .fill(item.priority.islandColor)
+                    .frame(width: 4, height: isExpanded ? 28 : 18)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 5) {
+                        Text(item.title)
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.92))
+                            .lineLimit(1)
+
+                        if item.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                            Image(systemName: isExpanded ? "chevron.up" : "note.text")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.54))
+                        }
+                    }
+
+                    HStack(spacing: 6) {
+                        Text(TodoAgeFormatter.elapsedText(since: item.createdAt, now: now))
+                        Text(TodoGroupResolver.group(for: item, groups: groups).name)
+                        if let occurrence = item.nextOccurrence(after: now),
+                           let scheduleText = TodoDeadlineFormatter.cardText(for: item, now: now) {
+                            Text(scheduleText)
+                                .foregroundStyle(occurrence < now ? .red.opacity(0.92) : .white.opacity(IslandSummaryStyle.tertiaryTextOpacity))
+                        }
+                    }
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.white.opacity(IslandSummaryStyle.tertiaryTextOpacity))
+                    .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
             }
 
-            Spacer(minLength: 8)
+            if isExpanded, let noteText {
+                ScrollView(.vertical) {
+                    Text(noteText)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.82))
+                        .lineSpacing(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.disabled)
+                }
+                .scrollIndicators(.never)
+                .frame(maxHeight: 48, alignment: .top)
+                .padding(.leading, 43)
+                .transition(.asymmetric(
+                    insertion: .opacity.combined(with: .move(edge: .top)),
+                    removal: .opacity
+                ))
+            }
         }
         .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: toggleExpansion)
+    }
+
+    private var noteText: String? {
+        guard let note = item.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty else {
+            return nil
+        }
+        return note
     }
 }
 

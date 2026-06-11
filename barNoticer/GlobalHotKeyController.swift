@@ -6,8 +6,10 @@ final class GlobalHotKeyController {
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
     private let onPressed: () -> Void
+    private let hotKeyID: UInt32
 
-    init(onPressed: @escaping () -> Void) {
+    init(id: UInt32 = 1, onPressed: @escaping () -> Void) {
+        hotKeyID = id
         self.onPressed = onPressed
     }
 
@@ -41,8 +43,9 @@ final class GlobalHotKeyController {
                     &hotKeyID
                 )
 
-                guard hotKeyID.signature == GlobalHotKeyController.signature else { return noErr }
                 let controller = Unmanaged<GlobalHotKeyController>.fromOpaque(userData).takeUnretainedValue()
+                guard hotKeyID.signature == GlobalHotKeyController.signature,
+                      hotKeyID.id == controller.hotKeyID else { return noErr }
                 Task { @MainActor in
                     controller.onPressed()
                 }
@@ -54,7 +57,7 @@ final class GlobalHotKeyController {
             &eventHandler
         )
 
-        let hotKeyID = EventHotKeyID(signature: Self.signature, id: 1)
+        let hotKeyID = EventHotKeyID(signature: Self.signature, id: hotKeyID)
         RegisterEventHotKey(
             shortcut.keyCode,
             shortcut.carbonModifiers,

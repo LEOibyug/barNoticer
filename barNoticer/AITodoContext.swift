@@ -3,6 +3,7 @@ import Foundation
 struct AITodoItemSnapshot: Equatable, Identifiable, Codable {
     let id: UUID
     let title: String
+    let note: String?
     let priority: TodoPriority
     let groupID: UUID
     let groupName: String
@@ -115,7 +116,8 @@ extension AITodoSnapshot {
                 let recurrenceText = item.recurrenceRule?.rawValue ?? "none"
                 let anchorText = item.recurrenceAnchor.map(Self.iso8601) ?? "none"
                 let anchorLocalText = item.recurrenceAnchor.map { Self.localDateTime($0, timeZone: timeZone) } ?? "none"
-                return "- id=\(item.id.uuidString) title=\(item.title) group=\(item.groupName) scheduleKind=\(item.scheduleKind.rawValue) deadlineAt=\(deadlineText) deadlineLocal=\(deadlineLocalText) scheduledTimes=[\(scheduledText)] scheduledTimesLocal=[\(scheduledLocalText)] recurrenceRule=\(recurrenceText) recurrenceAnchor=\(anchorText) recurrenceAnchorLocal=\(anchorLocalText) nextOccurrenceAt=\(nextText) nextOccurrenceLocal=\(nextLocalText) createdAt=\(Self.iso8601(item.createdAt)) updatedAt=\(Self.iso8601(item.updatedAt))"
+                let noteText = item.note?.replacingOccurrences(of: "\n", with: " ") ?? "none"
+                return "- id=\(item.id.uuidString) title=\(item.title) note=\(noteText) group=\(item.groupName) scheduleKind=\(item.scheduleKind.rawValue) deadlineAt=\(deadlineText) deadlineLocal=\(deadlineLocalText) scheduledTimes=[\(scheduledText)] scheduledTimesLocal=[\(scheduledLocalText)] recurrenceRule=\(recurrenceText) recurrenceAnchor=\(anchorText) recurrenceAnchorLocal=\(anchorLocalText) nextOccurrenceAt=\(nextText) nextOccurrenceLocal=\(nextLocalText) createdAt=\(Self.iso8601(item.createdAt)) updatedAt=\(Self.iso8601(item.updatedAt))"
             })
         }
 
@@ -170,6 +172,7 @@ extension AITodoItemSnapshot {
     init(item: TodoItem, group: TodoGroup) {
         id = item.id
         title = item.title
+        note = item.note
         priority = item.priority
         groupID = group.id
         groupName = group.name

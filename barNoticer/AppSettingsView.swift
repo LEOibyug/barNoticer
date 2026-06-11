@@ -1,12 +1,15 @@
+import Carbon.HIToolbox
 import SwiftUI
 
 struct AppSettingsView: View {
     @StateObject private var launchAtLogin = AppLaunchAtLoginController()
+    @State private var creationDraft = TodoCreationSettingsDraft()
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
+                creationSection
                 launchSection
             }
             .padding(24)
@@ -14,6 +17,7 @@ struct AppSettingsView: View {
         }
         .onAppear {
             launchAtLogin.refresh()
+            creationDraft.reload()
         }
     }
 
@@ -24,6 +28,26 @@ struct AppSettingsView: View {
             Text("管理应用级行为。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private var creationSection: some View {
+        SettingsSection(title: "新建事项", subtitle: "快捷键用于在屏幕中心调出独立的新建事项面板。") {
+            LabeledContent("快捷键") {
+                HStack {
+                    Text(creationDraft.shortcut.displayValue)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Menu("选择") {
+                        creationShortcutButton("⌘⌥N", .init(keyCode: UInt32(kVK_ANSI_N), modifiers: [.command, .option]))
+                        creationShortcutButton("⌘⇧N", .init(keyCode: UInt32(kVK_ANSI_N), modifiers: [.command, .shift]))
+                        creationShortcutButton("⌘⌃N", .init(keyCode: UInt32(kVK_ANSI_N), modifiers: [.command, .control]))
+                    }
+                }
+            }
         }
     }
 
@@ -53,6 +77,13 @@ struct AppSettingsView: View {
                         .textSelection(.enabled)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func creationShortcutButton(_ title: String, _ value: AIKeyboardShortcut) -> some View {
+        Button(title) {
+            creationDraft.shortcut = value
         }
     }
 }

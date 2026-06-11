@@ -129,6 +129,7 @@ struct AISettingsDraft {
 
 struct AIKeyboardShortcut: Equatable {
     static let `default` = AIKeyboardShortcut(keyCode: UInt32(kVK_Space), modifiers: [.command, .option])
+    static let createTodoDefault = AIKeyboardShortcut(keyCode: UInt32(kVK_ANSI_N), modifiers: [.command, .option])
 
     let keyCode: UInt32
     let modifiers: AIShortcutModifiers
@@ -139,9 +140,17 @@ struct AIKeyboardShortcut: Equatable {
     }
 
     init?(defaults: UserDefaults) {
-        guard defaults.object(forKey: AISettings.shortcutKeyCodeKey) != nil else { return nil }
-        let keyCode = UInt32(defaults.integer(forKey: AISettings.shortcutKeyCodeKey))
-        let rawModifiers = UInt32(defaults.integer(forKey: AISettings.shortcutModifiersKey))
+        self.init(
+            defaults: defaults,
+            keyCodeKey: AISettings.shortcutKeyCodeKey,
+            modifiersKey: AISettings.shortcutModifiersKey
+        )
+    }
+
+    init?(defaults: UserDefaults, keyCodeKey: String, modifiersKey: String) {
+        guard defaults.object(forKey: keyCodeKey) != nil else { return nil }
+        let keyCode = UInt32(defaults.integer(forKey: keyCodeKey))
+        let rawModifiers = UInt32(defaults.integer(forKey: modifiersKey))
         self.init(keyCode: keyCode, modifiers: AIShortcutModifiers(rawValue: rawModifiers))
     }
 
@@ -154,8 +163,16 @@ struct AIKeyboardShortcut: Equatable {
     }
 
     func save(to defaults: UserDefaults) {
-        defaults.set(Int(keyCode), forKey: AISettings.shortcutKeyCodeKey)
-        defaults.set(Int(modifiers.rawValue), forKey: AISettings.shortcutModifiersKey)
+        save(
+            to: defaults,
+            keyCodeKey: AISettings.shortcutKeyCodeKey,
+            modifiersKey: AISettings.shortcutModifiersKey
+        )
+    }
+
+    func save(to defaults: UserDefaults, keyCodeKey: String, modifiersKey: String) {
+        defaults.set(Int(keyCode), forKey: keyCodeKey)
+        defaults.set(Int(modifiers.rawValue), forKey: modifiersKey)
     }
 
     private static func keyName(for keyCode: UInt32) -> String {

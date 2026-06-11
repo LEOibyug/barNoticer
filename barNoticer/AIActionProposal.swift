@@ -4,6 +4,7 @@ enum AIActionProposal: Equatable, Identifiable {
     case createTodo(
         id: UUID = UUID(),
         title: String,
+        note: String? = nil,
         priority: TodoPriority,
         groupID: UUID? = nil,
         deadlineAt: Date? = nil,
@@ -14,12 +15,14 @@ enum AIActionProposal: Equatable, Identifiable {
     case updateTodo(
         id: UUID,
         title: String?,
+        note: String? = nil,
         priority: TodoPriority?,
         groupID: UUID? = nil,
         deadlineAt: Date? = nil,
         scheduledTimes: [Date] = [],
         recurrenceRule: TodoRecurrenceRule? = nil,
         recurrenceAnchor: Date? = nil,
+        clearsNote: Bool = false,
         clearsDeadline: Bool = false,
         clearsSchedule: Bool = false
     )
@@ -32,9 +35,9 @@ enum AIActionProposal: Equatable, Identifiable {
 
     var id: UUID {
         switch self {
-        case let .createTodo(id, _, _, _, _, _, _, _), let .createGroup(id, _, _), let .saveDailySummary(id, _):
+        case let .createTodo(id, _, _, _, _, _, _, _, _), let .createGroup(id, _, _), let .saveDailySummary(id, _):
             return id
-        case let .updateTodo(id, _, _, _, _, _, _, _, _, _), let .completeTodo(id), let .deleteTodo(id), let .updateGroup(id, _, _, _), let .deleteGroup(id):
+        case let .updateTodo(id, _, _, _, _, _, _, _, _, _, _, _), let .completeTodo(id), let .deleteTodo(id), let .updateGroup(id, _, _, _), let .deleteGroup(id):
             return id
         }
     }
@@ -43,7 +46,7 @@ enum AIActionProposal: Equatable, Identifiable {
 
     var referencedTodoID: UUID? {
         switch self {
-        case let .updateTodo(id, _, _, _, _, _, _, _, _, _), let .completeTodo(id), let .deleteTodo(id):
+        case let .updateTodo(id, _, _, _, _, _, _, _, _, _, _, _), let .completeTodo(id), let .deleteTodo(id):
             return id
         case .createTodo, .createGroup, .updateGroup, .deleteGroup, .saveDailySummary:
             return nil
@@ -52,7 +55,7 @@ enum AIActionProposal: Equatable, Identifiable {
 
     var groupID: UUID? {
         switch self {
-        case let .createTodo(_, _, _, groupID, _, _, _, _), let .updateTodo(_, _, _, groupID, _, _, _, _, _, _):
+        case let .createTodo(_, _, _, _, groupID, _, _, _, _), let .updateTodo(_, _, _, _, groupID, _, _, _, _, _, _, _):
             return groupID
         case let .updateGroup(id, _, _, _), let .deleteGroup(id):
             return id
@@ -63,7 +66,7 @@ enum AIActionProposal: Equatable, Identifiable {
 
     var deadlineAt: Date? {
         switch self {
-        case let .createTodo(_, _, _, _, deadlineAt, _, _, _), let .updateTodo(_, _, _, _, deadlineAt, _, _, _, _, _):
+        case let .createTodo(_, _, _, _, _, deadlineAt, _, _, _), let .updateTodo(_, _, _, _, _, deadlineAt, _, _, _, _, _, _):
             return deadlineAt
         case .completeTodo, .deleteTodo, .createGroup, .updateGroup, .deleteGroup, .saveDailySummary:
             return nil
@@ -72,14 +75,17 @@ enum AIActionProposal: Equatable, Identifiable {
 
     var summary: String {
         switch self {
-        case let .createTodo(_, title, priority, _, _, _, _, _):
+        case let .createTodo(_, title, _, priority, _, _, _, _, _):
             return "新增\(priority.title)重要性事项：\(title)"
-        case let .updateTodo(id, title, priority, groupID, deadlineAt, scheduledTimes, recurrenceRule, _, clearsDeadline, clearsSchedule):
+        case let .updateTodo(id, title, note, priority, groupID, deadlineAt, scheduledTimes, recurrenceRule, _, clearsNote, clearsDeadline, clearsSchedule):
             if let title, let priority {
                 return "修改事项：\(title)，重要性：\(priority.title)"
             }
             if let title {
                 return "修改事项：\(title)"
+            }
+            if note != nil || clearsNote {
+                return "修改事项备注：\(id.uuidString)"
             }
             if let priority {
                 return "修改事项：\(id.uuidString)，重要性：\(priority.title)"

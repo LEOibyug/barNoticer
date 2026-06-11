@@ -5,6 +5,7 @@ import SwiftData
 final class TodoItem {
     var id: UUID
     var title: String
+    var note: String?
     var priorityRawValue: String
     var groupID: UUID?
     var deadlineAt: Date?
@@ -64,6 +65,12 @@ final class TodoItem {
 
     func updateTitle(_ newTitle: String) {
         title = newTitle
+        updatedAt = Date()
+    }
+
+    func updateNote(_ newNote: String?) {
+        let trimmed = newNote?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        note = trimmed.isEmpty ? nil : trimmed
         updatedAt = Date()
     }
 
@@ -156,6 +163,7 @@ final class TodoItem {
     init(
         id: UUID = UUID(),
         title: String,
+        note: String? = nil,
         priority: TodoPriority = .medium,
         groupID: UUID? = nil,
         deadlineAt: Date? = nil,
@@ -169,6 +177,7 @@ final class TodoItem {
     ) {
         self.id = id
         self.title = title
+        self.note = note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? note : nil
         self.priorityRawValue = priority.rawValue
         self.groupID = groupID == TodoGroup.defaultGroupID ? nil : groupID
         self.deadlineAt = deadlineAt

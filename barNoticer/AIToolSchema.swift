@@ -72,6 +72,7 @@ enum AIToolSchema {
             description: "提出新增待办事项。需要用户确认。",
             properties: [
                 "title": .object(["type": .string("string")]),
+                "note": .object(["type": .string("string"), "description": .string("可选备注。适合保存任务背景、要求、检查清单或用户补充说明；不要把备注重复写进标题。")]),
                 "priority": .object(["type": .string("string"), "enum": .array([.string("high"), .string("medium"), .string("low")])]),
                 "group_id": .object(["type": .string("string")]),
                 "deadline_at": .object(["type": .string("string"), "description": .string("ISO8601 单次截止时间。用户说今天/明天/下周三时，先结合当前日期时间解析成明确 ISO8601。")]),
@@ -88,6 +89,7 @@ enum AIToolSchema {
             properties: [
                 "id": .object(["type": .string("string")]),
                 "title": .object(["type": .string("string")]),
+                "note": .object(["type": .string("string"), "description": .string("修改事项备注；清空备注时使用 clear_note=true。")]),
                 "priority": .object(["type": .string("string"), "enum": .array([.string("high"), .string("medium"), .string("low")])]),
                 "group_id": .object(["type": .string("string")]),
                 "deadline_at": .object(["type": .string("string"), "description": .string("ISO8601 单次截止时间")]),
@@ -95,6 +97,7 @@ enum AIToolSchema {
                 "recurrence_rule": .object(["type": .string("string"), "enum": .array([.string("daily"), .string("weekly"), .string("monthly"), .string("every_n_days")])]),
                 "recurrence_interval_days": .object(["type": .string("integer"), "minimum": .number(1), "description": .string("仅 recurrence_rule=every_n_days 时填写，表示每 N 天重复。")]),
                 "recurrence_anchor": .object(["type": .string("string"), "description": .string("重复事项起始时间，ISO8601。")]),
+                "clear_note": .object(["type": .string("boolean"), "description": .string("清空事项备注。")]),
                 "clear_deadline": .object(["type": .string("boolean")]),
                 "clear_schedule": .object(["type": .string("boolean"), "description": .string("清除所有时间计划，包括 DDL、多时间点和重复规则。")])
             ],

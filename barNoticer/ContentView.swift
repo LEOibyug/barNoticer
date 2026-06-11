@@ -6,11 +6,6 @@ struct ContentView: View {
     @Query private var todoItems: [TodoItem]
     @Query private var storedGroups: [TodoGroup]
 
-    @State private var draftTitle = ""
-    @State private var draftPriority: TodoPriority = .medium
-    @State private var draftGroupID: UUID = TodoGroup.defaultGroupID
-    @State private var draftHasDeadline = false
-    @State private var draftDeadline = Date().addingTimeInterval(3_600)
     @State private var draftGroupName = ""
     @State private var selection: SidebarSelection = .filter(.active)
 
@@ -87,7 +82,7 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     header
                     Divider()
-                    editor
+                    toolbar
                     Divider()
                     todoList
                 }
@@ -180,6 +175,13 @@ struct ContentView: View {
             Spacer()
 
             Button {
+                showTodoCreationPanel()
+            } label: {
+                Label("新建事项", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
+
+            Button {
                 seedExamplesIfNeeded()
             } label: {
                 Label("示例", systemImage: "sparkles")
@@ -191,46 +193,9 @@ struct ContentView: View {
         .padding(24)
     }
 
-    private var editor: some View {
+    private var toolbar: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                TextField("添加待办", text: $draftTitle)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(addTodo)
-
-                Picker("优先级", selection: $draftPriority) {
-                    ForEach(TodoPriority.allCases) { priority in
-                        Label(priority.title, systemImage: priority.systemImage)
-                            .tag(priority)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 180)
-
-                Button(action: addTodo) {
-                    Label("添加", systemImage: "plus")
-                }
-                .keyboardShortcut(.return, modifiers: .command)
-                .disabled(trimmedDraftTitle.isEmpty)
-            }
-
-            HStack(spacing: 12) {
-                Picker("分组", selection: $draftGroupID) {
-                    ForEach(groups) { group in
-                        Text(group.name).tag(group.id)
-                    }
-                }
-                .frame(width: 180)
-
-                Toggle("DDL", isOn: $draftHasDeadline)
-                    .toggleStyle(.checkbox)
-
-                if draftHasDeadline {
-                    DatePicker("", selection: $draftDeadline, displayedComponents: [.date, .hourAndMinute])
-                        .labelsHidden()
-                        .frame(width: 190)
-                }
-
                 Spacer()
 
                 groupCreator
@@ -243,7 +208,7 @@ struct ContentView: View {
         .padding(24)
         .onChange(of: selection) { _, newSelection in
             if case let .group(groupID) = newSelection {
-                draftGroupID = groupID
+                _ = groupID
             }
         }
     }
@@ -333,27 +298,8 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var trimmedDraftTitle: String {
-        draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     private var trimmedDraftGroupName: String {
         draftGroupName.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func addTodo() {
-        let title = trimmedDraftTitle
-        guard !title.isEmpty else { return }
-
-        modelContext.insert(TodoItem(
-            title: title,
-            priority: draftPriority,
-            groupID: draftGroupID,
-            deadlineAt: draftHasDeadline ? draftDeadline : nil
-        ))
-        draftTitle = ""
-        draftPriority = .medium
-        draftHasDeadline = false
     }
 
     private func addGroup() {
@@ -368,7 +314,6 @@ struct ContentView: View {
         modelContext.insert(group)
         draftGroupName = ""
         selection = .group(group.id)
-        draftGroupID = group.id
     }
 
     private func deleteItems(at offsets: IndexSet) {
@@ -384,7 +329,10 @@ struct ContentView: View {
         }
         modelContext.delete(group)
         selection = .filter(.active)
-        draftGroupID = TodoGroup.defaultGroupID
+    }
+
+    private func showTodoCreationPanel() {
+        NotificationCenter.default.post(name: TodoCreationSettings.showPanelNotification, object: nil)
     }
 
     private func seedExamplesIfNeeded() {

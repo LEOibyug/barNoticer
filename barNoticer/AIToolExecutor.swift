@@ -44,6 +44,7 @@ final class AIToolExecutor {
         case "create_todo":
             return .proposal(.createTodo(
                 title: try arguments.string("title"),
+                note: arguments.optionalRawString("note"),
                 priority: try arguments.priority("priority"),
                 groupID: arguments.optionalUUID("group_id"),
                 deadlineAt: arguments.optionalDate("deadline_at"),
@@ -55,12 +56,14 @@ final class AIToolExecutor {
             return .proposal(.updateTodo(
                 id: try arguments.uuid("id"),
                 title: arguments.optionalString("title"),
+                note: arguments.optionalRawString("note"),
                 priority: arguments.optionalPriority("priority"),
                 groupID: arguments.optionalUUID("group_id"),
                 deadlineAt: arguments.optionalDate("deadline_at"),
                 scheduledTimes: arguments.optionalDates("scheduled_times"),
                 recurrenceRule: arguments.optionalRecurrenceRule("recurrence_rule", intervalDaysKey: "recurrence_interval_days"),
                 recurrenceAnchor: arguments.optionalDate("recurrence_anchor"),
+                clearsNote: arguments.optionalBool("clear_note") ?? false,
                 clearsDeadline: arguments.optionalBool("clear_deadline") ?? false,
                 clearsSchedule: arguments.optionalBool("clear_schedule") ?? false
             ))
@@ -98,10 +101,11 @@ final class AIToolExecutor {
     @discardableResult
     func apply(_ proposal: AIActionProposal) throws -> AIActionApplicationResult {
         switch proposal {
-        case let .createTodo(id, title, priority, groupID, deadlineAt, scheduledTimes, recurrenceRule, recurrenceAnchor):
+        case let .createTodo(id, title, note, priority, groupID, deadlineAt, scheduledTimes, recurrenceRule, recurrenceAnchor):
             modelContext.insert(TodoItem(
                 id: id,
                 title: title,
+                note: note,
                 priority: priority,
                 groupID: groupID,
                 deadlineAt: deadlineAt,
@@ -111,10 +115,16 @@ final class AIToolExecutor {
             ))
             try modelContext.save()
             return .createdTodo(id: id, title: title)
-        case let .updateTodo(id, title, priority, groupID, deadlineAt, scheduledTimes, recurrenceRule, recurrenceAnchor, clearsDeadline, clearsSchedule):
+        case let .updateTodo(id, title, note, priority, groupID, deadlineAt, scheduledTimes, recurrenceRule, recurrenceAnchor, clearsNote, clearsDeadline, clearsSchedule):
             let item = try fetchTodo(id: id)
             if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 item.updateTitle(title)
+            }
+            if let note {
+                item.updateNote(note)
+            }
+            if clearsNote {
+                item.updateNote(nil)
             }
             if let priority {
                 item.priority = priority
@@ -266,6 +276,10 @@ private struct ToolArguments {
         guard let value = values[key] as? String else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    func optionalRawString(_ key: String) -> String? {
+        values[key] as? String
     }
 
     func uuid(_ key: String) throws -> UUID {

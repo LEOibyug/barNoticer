@@ -34,7 +34,9 @@ struct barNoticerApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var islandController: NotchIslandController?
     private var assistantController: AIAssistantPanelController?
-    private var hotKeyController: GlobalHotKeyController?
+    private var assistantHotKeyController: GlobalHotKeyController?
+    private var todoCreationController: TodoCreationPanelController?
+    private var todoCreationHotKeyController: GlobalHotKeyController?
     private var reminderScheduler: ReminderScheduler?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -57,11 +59,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let assistant = AIAssistantPanelController(modelContext: modelContainer.mainContext)
         assistantController = assistant
 
-        let hotKey = GlobalHotKeyController { [weak assistant] in
+        let todoCreation = TodoCreationPanelController(modelContext: modelContainer.mainContext)
+        todoCreationController = todoCreation
+
+        let assistantHotKey = GlobalHotKeyController(id: 1) { [weak assistant] in
             assistant?.toggle()
         }
-        hotKey.register(shortcut: AISettings(defaults: .standard).shortcut)
-        hotKeyController = hotKey
+        assistantHotKey.register(shortcut: AISettings(defaults: .standard).shortcut)
+        assistantHotKeyController = assistantHotKey
+
+        let creationHotKey = GlobalHotKeyController(id: 2) { [weak todoCreation] in
+            todoCreation?.toggle()
+        }
+        creationHotKey.register(shortcut: TodoCreationSettings(defaults: .standard).shortcut)
+        todoCreationHotKeyController = creationHotKey
 
         NotificationCenter.default.addObserver(
             self,
@@ -69,9 +80,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: AISettings.didChangeNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(todoCreationSettingsChanged),
+            name: TodoCreationSettings.didChangeNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(showTodoCreationPanel),
+            name: TodoCreationSettings.showPanelNotification,
+            object: nil
+        )
     }
 
     @objc private func aiSettingsChanged() {
-        hotKeyController?.register(shortcut: AISettings(defaults: .standard).shortcut)
+        assistantHotKeyController?.register(shortcut: AISettings(defaults: .standard).shortcut)
+    }
+
+    @objc private func todoCreationSettingsChanged() {
+        todoCreationHotKeyController?.register(shortcut: TodoCreationSettings(defaults: .standard).shortcut)
+    }
+
+    @objc private func showTodoCreationPanel() {
+        todoCreationController?.show()
     }
 }
