@@ -31,9 +31,9 @@ final class GlobalHotKeyController {
         InstallEventHandler(
             GetApplicationEventTarget(),
             { _, event, userData in
-                guard let userData, let event else { return noErr }
+                guard let userData, let event else { return OSStatus(eventNotHandledErr) }
                 var hotKeyID = EventHotKeyID()
-                GetEventParameter(
+                let parameterStatus = GetEventParameter(
                     event,
                     EventParamName(kEventParamDirectObject),
                     EventParamType(typeEventHotKeyID),
@@ -42,11 +42,18 @@ final class GlobalHotKeyController {
                     nil,
                     &hotKeyID
                 )
+                guard parameterStatus == noErr else { return OSStatus(eventNotHandledErr) }
 
                 let controller = Unmanaged<GlobalHotKeyController>.fromOpaque(userData).takeUnretainedValue()
                 guard hotKeyID.signature == GlobalHotKeyController.signature,
-                      hotKeyID.id == controller.hotKeyID else { return noErr }
+                      hotKeyID.id == controller.hotKeyID else { return OSStatus(eventNotHandledErr) }
                 Task { @MainActor in
+                    try? AppDebugLogStore.shared.write(
+                        .debug,
+                        category: "HotKey",
+                        message: "Global hotkey pressed",
+                        metadata: ["id": "\(controller.hotKeyID)"]
+                    )
                     controller.onPressed()
                 }
                 return noErr
@@ -58,13 +65,23 @@ final class GlobalHotKeyController {
         )
 
         let hotKeyID = EventHotKeyID(signature: Self.signature, id: hotKeyID)
-        RegisterEventHotKey(
+        let status = RegisterEventHotKey(
             shortcut.keyCode,
             shortcut.carbonModifiers,
             hotKeyID,
             GetApplicationEventTarget(),
             0,
             &hotKeyRef
+        )
+        try? AppDebugLogStore.shared.write(
+            status == noErr ? .debug : .error,
+            category: "HotKey",
+            message: "Registered global hotkey",
+            metadata: [
+                "id": "\(self.hotKeyID)",
+                "shortcut": shortcut.displayValue,
+                "status": "\(status)"
+            ]
         )
     }
 

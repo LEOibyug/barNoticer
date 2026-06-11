@@ -13,6 +13,7 @@ struct barNoticerApp: App {
         } catch {
             fatalError("Failed to create model container: \(error)")
         }
+        appDelegate.configure(modelContainer: modelContainer)
     }
 
     var body: some Scene {
