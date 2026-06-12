@@ -84,6 +84,35 @@ enum TodoGroupResolver {
         (groups.map(\.sortOrder).max() ?? 0) + 1
     }
 
+    static func moveGroup(in groups: [TodoGroup], moving movingID: UUID, to targetIndex: Int) {
+        var orderedGroups = normalizedGroups(groups)
+        guard let sourceIndex = orderedGroups.firstIndex(where: { $0.id == movingID }) else { return }
+
+        let movedGroup = orderedGroups.remove(at: sourceIndex)
+        let destinationIndex = min(max(targetIndex, 0), orderedGroups.count)
+        orderedGroups.insert(movedGroup, at: destinationIndex)
+
+        for (index, group) in orderedGroups.enumerated() {
+            group.update(sortOrder: index)
+        }
+    }
+
+    static func moveGroup(in groups: [TodoGroup], moving movingID: UUID, before targetID: UUID) {
+        let orderedGroups = normalizedGroups(groups)
+        guard let targetIndex = orderedGroups.firstIndex(where: { $0.id == targetID }) else { return }
+        moveGroup(in: orderedGroups, moving: movingID, to: targetIndex)
+    }
+
+    static func moveGroup(in groups: [TodoGroup], moving movingID: UUID, near targetID: UUID) {
+        let orderedGroups = normalizedGroups(groups)
+        guard let sourceIndex = orderedGroups.firstIndex(where: { $0.id == movingID }),
+              let targetIndex = orderedGroups.firstIndex(where: { $0.id == targetID }),
+              sourceIndex != targetIndex
+        else { return }
+
+        moveGroup(in: orderedGroups, moving: movingID, to: targetIndex)
+    }
+
     static func nextColorHex(for groups: [TodoGroup]) -> String {
         let index = max(0, groups.count) % TodoGroup.presetColorHexes.count
         return TodoGroup.presetColorHexes[index]
@@ -97,8 +126,7 @@ enum TodoGroupBootstrap {
             if let defaultGroup = groups.first(where: { $0.id == TodoGroup.defaultGroupID }) {
                 defaultGroup.update(
                     name: TodoGroup.defaultName,
-                    colorHex: TodoGroup.defaultColorHex,
-                    sortOrder: 0
+                    colorHex: TodoGroup.defaultColorHex
                 )
             } else {
                 modelContext.insert(TodoGroup.defaultGroup)

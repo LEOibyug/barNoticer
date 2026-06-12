@@ -36,6 +36,45 @@ final class TodoSortingTests: XCTestCase {
         XCTAssertFalse(defaultGroup.canDelete)
     }
 
+    func testReorderingGroupsPersistsSortOrder() {
+        let defaultGroup = TodoGroup.defaultGroup
+        let home = TodoGroup(name: "生活", sortOrder: 1)
+        let work = TodoGroup(name: "工作", sortOrder: 2)
+        let study = TodoGroup(name: "学习", sortOrder: 3)
+
+        TodoGroupResolver.moveGroup(in: [defaultGroup, home, work, study], moving: study.id, to: 0)
+
+        let groups = TodoGroupResolver.normalizedGroups([defaultGroup, home, work, study])
+        XCTAssertEqual(groups.map(\.name), ["学习", "默认分组", "生活", "工作"])
+        XCTAssertEqual(groups.map(\.sortOrder), [0, 1, 2, 3])
+    }
+
+    func testMovingEarlierGroupOntoLaterGroupMovesAfterTarget() {
+        let defaultGroup = TodoGroup.defaultGroup
+        let first = TodoGroup(name: "第一", sortOrder: 1)
+        let second = TodoGroup(name: "第二", sortOrder: 2)
+        let third = TodoGroup(name: "第三", sortOrder: 3)
+
+        TodoGroupResolver.moveGroup(in: [defaultGroup, first, second, third], moving: first.id, near: third.id)
+
+        let groups = TodoGroupResolver.normalizedGroups([defaultGroup, first, second, third])
+        XCTAssertEqual(groups.map(\.name), ["默认分组", "第二", "第三", "第一"])
+        XCTAssertEqual(groups.map(\.sortOrder), [0, 1, 2, 3])
+    }
+
+    func testMovingLaterGroupOntoEarlierGroupMovesBeforeTarget() {
+        let defaultGroup = TodoGroup.defaultGroup
+        let first = TodoGroup(name: "第一", sortOrder: 1)
+        let second = TodoGroup(name: "第二", sortOrder: 2)
+        let third = TodoGroup(name: "第三", sortOrder: 3)
+
+        TodoGroupResolver.moveGroup(in: [defaultGroup, first, second, third], moving: third.id, near: first.id)
+
+        let groups = TodoGroupResolver.normalizedGroups([defaultGroup, first, second, third])
+        XCTAssertEqual(groups.map(\.name), ["默认分组", "第三", "第一", "第二"])
+        XCTAssertEqual(groups.map(\.sortOrder), [0, 1, 2, 3])
+    }
+
     @MainActor
     func testBootstrapRenamesExistingDefaultGroupFromInbox() throws {
         let container = try ModelContainer(
@@ -52,7 +91,7 @@ final class TodoSortingTests: XCTestCase {
         XCTAssertEqual(groups.count, 1)
         XCTAssertEqual(groups.first?.name, "默认分组")
         XCTAssertEqual(groups.first?.colorHex, TodoGroup.defaultColorHex)
-        XCTAssertEqual(groups.first?.sortOrder, 0)
+        XCTAssertEqual(groups.first?.sortOrder, 9)
     }
 
     func testTodoDisplayGroupsUseDefaultGroupForItemsWithoutGroup() {

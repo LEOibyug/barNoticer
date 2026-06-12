@@ -24,6 +24,7 @@ struct IslandSummaryView: View {
 
     @State private var layoutVersion = 0
     @State private var now = Date()
+    @State private var targetedGroupID: UUID?
     @AppStorage(IslandDisplayMode.storageKey) private var modeRawValue = IslandDisplayMode.standard.rawValue
     @AppStorage(IslandGroupingMode.storageKey) private var groupingModeRawValue = IslandGroupingMode.defaultMode.rawValue
 
@@ -216,7 +217,24 @@ struct IslandSummaryView: View {
                             VStack(spacing: 8) {
                                 ForEach(visibleDisplayGroups) { displayGroup in
                                     IslandDisplayGroupSection(displayGroup: displayGroup, groups: groups, now: now)
+                                        .draggable(displayGroup.group.id.uuidString) {
+                                            islandGroupDragPreview(displayGroup.group)
+                                        }
+                                        .dropDestination(for: String.self) { droppedIDs, _ in
+                                            reorderGroup(from: droppedIDs, near: displayGroup.group)
+                                        } isTargeted: { isTargeted in
+                                            targetedGroupID = isTargeted ? displayGroup.group.id : nil
+                                        }
+                                        .overlay {
+                                            groupDropOverlay(for: displayGroup.group)
+                                        }
                                 }
+
+                                Color.clear
+                                    .frame(height: 8)
+                                    .dropDestination(for: String.self) { droppedIDs, _ in
+                                        return reorderGroupToEnd(from: droppedIDs)
+                                    }
                             }
                         }
                     }
@@ -261,7 +279,24 @@ struct IslandSummaryView: View {
                                 IslandDisplayGroupColumn(displayGroup: displayGroup, groups: groups, now: now)
                                     .frame(width: columnWidth)
                                     .frame(maxHeight: .infinity)
+                                    .draggable(displayGroup.group.id.uuidString) {
+                                        islandGroupDragPreview(displayGroup.group)
+                                    }
+                                    .dropDestination(for: String.self) { droppedIDs, _ in
+                                        reorderGroup(from: droppedIDs, near: displayGroup.group)
+                                    } isTargeted: { isTargeted in
+                                        targetedGroupID = isTargeted ? displayGroup.group.id : nil
+                                    }
+                                    .overlay {
+                                        groupDropOverlay(for: displayGroup.group)
+                                    }
                             }
+
+                            Color.clear
+                                .frame(width: 10)
+                                .dropDestination(for: String.self) { droppedIDs, _ in
+                                    return reorderGroupToEnd(from: droppedIDs)
+                                }
                         }
                         .frame(width: contentWidth, height: proxy.size.height, alignment: .topLeading)
                         .padding(.horizontal, 1)
@@ -300,11 +335,66 @@ struct IslandSummaryView: View {
     }
 
     private var footerText: String? {
-        "顶部中央悬停可快速查看"
+        "拖动改变分组顺序"
     }
 
     private func wideItems(for priority: TodoPriority) -> [TodoItem] {
         IslandWideTodoPolicy.items(for: priority, from: activeItems)
+    }
+
+    private func islandGroupDragPreview(_ group: TodoGroup) -> some View {
+        HStack(spacing: 7) {
+            Circle()
+                .fill(group.color)
+                .frame(width: 8, height: 8)
+            Text(group.name)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.9))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(.black.opacity(0.86), in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(group.color.opacity(0.38), lineWidth: 1)
+        }
+    }
+
+    private func groupDropOverlay(for group: TodoGroup) -> some View {
+        RoundedRectangle(cornerRadius: 13, style: .continuous)
+            .stroke(group.color.opacity(targetedGroupID == group.id ? 0.86 : 0), lineWidth: 2)
+            .animation(.smooth(duration: 0.18), value: targetedGroupID)
+    }
+
+    private func reorderGroup(from droppedIDs: [String], near targetGroup: TodoGroup) -> Bool {
+        guard let idString = droppedIDs.first,
+              let movingID = UUID(uuidString: idString),
+              movingID != targetGroup.id
+        else {
+            return false
+        }
+
+        withAnimation(.smooth(duration: 0.26)) {
+            TodoGroupResolver.moveGroup(in: groups, moving: movingID, near: targetGroup.id)
+        }
+        try? modelContext.save()
+        targetedGroupID = nil
+        return true
+    }
+
+    private func reorderGroupToEnd(from droppedIDs: [String]) -> Bool {
+        guard let idString = droppedIDs.first,
+              let movingID = UUID(uuidString: idString)
+        else {
+            return false
+        }
+
+        withAnimation(.smooth(duration: 0.26)) {
+            TodoGroupResolver.moveGroup(in: groups, moving: movingID, to: groups.count - 1)
+        }
+        try? modelContext.save()
+        targetedGroupID = nil
+        return true
     }
 }
 

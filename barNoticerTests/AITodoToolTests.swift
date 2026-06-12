@@ -186,7 +186,7 @@ final class AITodoToolTests: XCTestCase {
 
         let result = try executor.handle(call)
 
-        guard case let .proposal(.createTodo(_, title, priority, groupID, deadlineAt, _, _, _)) = result else {
+        guard case let .proposal(.createTodo(_, title, _, priority, groupID, deadlineAt, _, _, _)) = result else {
             return XCTFail("Expected create todo proposal")
         }
         XCTAssertEqual(title, "写周报")
@@ -213,7 +213,7 @@ final class AITodoToolTests: XCTestCase {
 
         let result = try executor.handle(call)
 
-        guard case let .proposal(.createTodo(_, title, priority, _, deadlineAt, scheduledTimes, recurrenceRule, recurrenceAnchor)) = result else {
+        guard case let .proposal(.createTodo(_, title, _, priority, _, deadlineAt, scheduledTimes, recurrenceRule, recurrenceAnchor)) = result else {
             return XCTFail("Expected scheduled create todo proposal")
         }
         XCTAssertEqual(title, "喝水")
@@ -242,7 +242,7 @@ final class AITodoToolTests: XCTestCase {
 
         let result = try executor.handle(call)
 
-        guard case let .proposal(.createTodo(_, _, _, _, _, _, recurrenceRule, recurrenceAnchor)) = result else {
+        guard case let .proposal(.createTodo(_, _, _, _, _, _, _, recurrenceRule, recurrenceAnchor)) = result else {
             return XCTFail("Expected scheduled create todo proposal")
         }
         XCTAssertEqual(recurrenceRule, .everyNDays(3))

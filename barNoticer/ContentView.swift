@@ -8,6 +8,7 @@ struct ContentView: View {
 
     @State private var draftGroupName = ""
     @State private var selection: SidebarSelection = .filter(.active)
+    @State private var draggedGroupID: UUID?
 
     private var groups: [TodoGroup] {
         TodoGroupResolver.normalizedGroups(storedGroups)
@@ -113,14 +114,14 @@ struct ContentView: View {
 
             Section("分组") {
                 ForEach(groups) { group in
-                    sidebarButton(.group(group.id)) {
-                        Text(group.name)
-                    } icon: {
-                        Circle()
-                            .fill(group.color)
-                            .frame(width: 9, height: 9)
-                    }
+                    sidebarGroupRow(group)
                 }
+
+                Color.clear
+                    .frame(height: 6)
+                    .dropDestination(for: String.self) { droppedIDs, _ in
+                        return reorderGroupToEnd(from: droppedIDs)
+                    }
             }
 
             Section("偏好") {
@@ -132,6 +133,59 @@ struct ContentView: View {
         }
         .navigationTitle("barNoticer")
         .frame(minWidth: 150)
+    }
+
+    private func groupDragPreview(_ group: TodoGroup) -> some View {
+        Label {
+            Text(group.name)
+        } icon: {
+            Circle()
+                .fill(group.color)
+                .frame(width: 9, height: 9)
+        }
+        .font(.caption.weight(.medium))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func sidebarGroupRow(_ group: TodoGroup) -> some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(group.color)
+                .frame(width: 9, height: 9)
+
+            Text(group.name)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Image(systemName: "line.3.horizontal")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary.opacity(0.9))
+                .frame(width: 22, height: 22)
+                .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .contentShape(Rectangle())
+                .draggable(group.id.uuidString) {
+                    groupDragPreview(group)
+                }
+                .help("拖动改变分组顺序")
+        }
+        .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+        .padding(.leading, 0)
+        .padding(.trailing, 4)
+        .padding(.vertical, 4)
+        .background(sidebarGroupRowBackground(for: group), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selection = .group(group.id)
+        }
+        .dropDestination(for: String.self) { droppedIDs, _ in
+            return reorderGroup(from: droppedIDs, near: group)
+        } isTargeted: { isTargeted in
+            draggedGroupID = isTargeted ? group.id : nil
+        }
+        .listRowInsets(EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 12))
+        .listRowBackground(Color.clear)
+        .help("拖动改变分组顺序")
     }
 
     private func sidebarButton(_ target: SidebarSelection, title: String, systemImage: String) -> some View {
@@ -159,7 +213,24 @@ struct ContentView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .listRowBackground(selection == target ? Color.accentColor.opacity(0.16) : Color.clear)
+        .listRowBackground(sidebarRowBackground(for: target))
+    }
+
+    private func sidebarRowBackground(for target: SidebarSelection) -> Color {
+        if selection == target {
+            return Color.accentColor.opacity(0.16)
+        }
+        return Color.clear
+    }
+
+    private func sidebarGroupRowBackground(for group: TodoGroup) -> Color {
+        if group.id == draggedGroupID {
+            return Color.primary.opacity(0.09)
+        }
+        if selection == .group(group.id) {
+            return Color.accentColor.opacity(0.16)
+        }
+        return Color.clear
     }
 
     private var header: some View {
@@ -329,6 +400,37 @@ struct ContentView: View {
         }
         modelContext.delete(group)
         selection = .filter(.active)
+    }
+
+    private func reorderGroup(from droppedIDs: [String], near targetGroup: TodoGroup) -> Bool {
+        guard let idString = droppedIDs.first,
+              let movingID = UUID(uuidString: idString),
+              movingID != targetGroup.id
+        else {
+            return false
+        }
+
+        withAnimation(.smooth(duration: 0.24)) {
+            TodoGroupResolver.moveGroup(in: groups, moving: movingID, near: targetGroup.id)
+        }
+        try? modelContext.save()
+        draggedGroupID = nil
+        return true
+    }
+
+    private func reorderGroupToEnd(from droppedIDs: [String]) -> Bool {
+        guard let idString = droppedIDs.first,
+              let movingID = UUID(uuidString: idString)
+        else {
+            return false
+        }
+
+        withAnimation(.smooth(duration: 0.24)) {
+            TodoGroupResolver.moveGroup(in: groups, moving: movingID, to: groups.count - 1)
+        }
+        try? modelContext.save()
+        draggedGroupID = nil
+        return true
     }
 
     private func showTodoCreationPanel() {
