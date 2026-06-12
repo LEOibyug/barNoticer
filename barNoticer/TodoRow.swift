@@ -33,21 +33,11 @@ struct TodoRow: View {
             }
 
             if isNoteExpanded, let noteText {
-                ScrollView(.vertical) {
-                    Text(noteText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineSpacing(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                }
-                .frame(maxHeight: 72, alignment: .top)
-                .padding(.leading, 32)
-                .padding(.trailing, 28)
-                .transition(.asymmetric(
-                    insertion: .opacity.combined(with: .move(edge: .top)),
-                    removal: .opacity
-                ))
+                expandedNotePanel(noteText)
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .move(edge: .top)),
+                        removal: .opacity
+                    ))
             }
         }
         .padding(.vertical, 8)
@@ -368,6 +358,29 @@ struct TodoRow: View {
         }
         .pickerStyle(.menu)
         .frame(width: 118, alignment: .leading)
+    }
+
+    private func expandedNotePanel(_ note: String) -> some View {
+        ScrollView(.vertical) {
+            Text(note)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineSpacing(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+        }
+        .scrollIndicators(.visible)
+        .frame(height: 72, alignment: .top)
+        .background(.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(.quaternary, lineWidth: 1)
+        }
+        .padding(.leading, 32)
+        .padding(.trailing, 28)
+        .padding(.top, 2)
     }
 
     private var metadata: some View {
