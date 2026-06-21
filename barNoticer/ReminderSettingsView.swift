@@ -51,6 +51,7 @@ struct ReminderSettingsView: View {
                     ReminderSettingSlider("向下偏移", value: binding(\.reminderPanelOffsetY), range: -24...220, suffix: "px", preview: ReminderSettings.requestPanelPreview)
                     ReminderSettingSlider("窗口宽度", value: binding(\.reminderPanelWidth), range: 320...680, suffix: "px", preview: ReminderSettings.requestPanelPreview)
                     ReminderSettingSlider("顶部留白", value: binding(\.reminderPanelTopContentInset), range: 12...82, suffix: "px", preview: ReminderSettings.requestPanelPreview)
+                    ReminderSettingSlider("持续时间", value: binding(\.reminderPanelAutoCloseDelay), range: 1...15, suffix: "秒", preview: ReminderSettings.requestPanelPreview)
                 }
 
                 Text("DDL 会在提前 1 天和提前 12 小时进入 AI 判断。")

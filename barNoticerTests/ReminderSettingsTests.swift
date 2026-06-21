@@ -15,6 +15,7 @@ final class ReminderSettingsTests: XCTestCase {
         XCTAssertEqual(settings.reminderPanelOffsetY, 0)
         XCTAssertEqual(settings.reminderPanelWidth, 392)
         XCTAssertEqual(settings.reminderPanelTopContentInset, 34)
+        XCTAssertEqual(settings.reminderPanelAutoCloseDelay, 4)
     }
 
     func testReminderSettingsRoundTripAndNotifyChanges() {
@@ -41,7 +42,8 @@ final class ReminderSettingsTests: XCTestCase {
             reminderPanelOffsetX: 24,
             reminderPanelOffsetY: 18,
             reminderPanelWidth: 460,
-            reminderPanelTopContentInset: 48
+            reminderPanelTopContentInset: 48,
+            reminderPanelAutoCloseDelay: 8
         ).save(to: defaults)
 
         let stored = ReminderSettings(defaults: defaults)
@@ -55,6 +57,7 @@ final class ReminderSettingsTests: XCTestCase {
         XCTAssertEqual(stored.reminderPanelOffsetY, 18)
         XCTAssertEqual(stored.reminderPanelWidth, 460)
         XCTAssertEqual(stored.reminderPanelTopContentInset, 48)
+        XCTAssertEqual(stored.reminderPanelAutoCloseDelay, 8)
         XCTAssertTrue(observed)
     }
 
@@ -122,8 +125,12 @@ final class ReminderSettingsTests: XCTestCase {
         XCTAssertEqual(collapsedFrame, islandLayout.hotZoneFrame(in: screen))
     }
 
-    func testReminderPanelAutoClosesAfterFourSeconds() {
-        XCTAssertEqual(ReminderPresentationTiming.panelAutoCloseDelay, 4)
+    func testReminderPanelAutoCloseDelayIsConfigurable() {
+        let shortDelay = ReminderSettings(reminderPanelAutoCloseDelay: 1)
+        let longDelay = ReminderSettings(reminderPanelAutoCloseDelay: 10)
+
+        XCTAssertEqual(shortDelay.reminderPanelAutoCloseDelay, 1)
+        XCTAssertEqual(longDelay.reminderPanelAutoCloseDelay, 10)
     }
 
     func testReminderPresentationWaitsForGlowBeforeExpandingPanel() {

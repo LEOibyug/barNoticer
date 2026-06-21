@@ -195,7 +195,7 @@ final class ReminderPresenter {
         revealView.animateExpansion(duration: ReminderPresentationTiming.panelExpansionDuration)
 
         if autoClose {
-            let closeDelay = ReminderPresentationTiming.panelExpansionDuration + ReminderPresentationTiming.panelAutoCloseDelay
+            let closeDelay = ReminderPresentationTiming.panelExpansionDuration + settings.reminderPanelAutoCloseDelay
             DispatchQueue.main.asyncAfter(deadline: .now() + closeDelay) { [weak self, weak panel] in
                 guard let self, panel === self.reminderPanel else { return }
                 self.hidePanel()

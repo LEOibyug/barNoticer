@@ -19,6 +19,7 @@ struct ReminderSettings: Equatable {
     private static let reminderPanelOffsetYKey = "ReminderSettingsPanelOffsetY"
     private static let reminderPanelWidthKey = "ReminderSettingsPanelWidth"
     private static let reminderPanelTopContentInsetKey = "ReminderSettingsPanelTopContentInset"
+    private static let reminderPanelAutoCloseDelayKey = "ReminderSettingsPanelAutoCloseDelay"
 
     var aiPollingEnabled: Bool = false
     var pollingInterval: TimeInterval = 1_800
@@ -30,6 +31,7 @@ struct ReminderSettings: Equatable {
     var reminderPanelOffsetY: Double = 0
     var reminderPanelWidth: Double = 392
     var reminderPanelTopContentInset: Double = Double(ReminderPresentationTiming.defaultPanelTopContentInset)
+    var reminderPanelAutoCloseDelay: TimeInterval = ReminderPresentationTiming.defaultPanelAutoCloseDelay
 
     init(
         aiPollingEnabled: Bool = false,
@@ -41,7 +43,8 @@ struct ReminderSettings: Equatable {
         reminderPanelOffsetX: Double = 0,
         reminderPanelOffsetY: Double = 0,
         reminderPanelWidth: Double = 392,
-        reminderPanelTopContentInset: Double = Double(ReminderPresentationTiming.defaultPanelTopContentInset)
+        reminderPanelTopContentInset: Double = Double(ReminderPresentationTiming.defaultPanelTopContentInset),
+        reminderPanelAutoCloseDelay: TimeInterval = ReminderPresentationTiming.defaultPanelAutoCloseDelay
     ) {
         self.aiPollingEnabled = aiPollingEnabled
         self.pollingInterval = pollingInterval
@@ -53,6 +56,7 @@ struct ReminderSettings: Equatable {
         self.reminderPanelOffsetY = reminderPanelOffsetY
         self.reminderPanelWidth = reminderPanelWidth
         self.reminderPanelTopContentInset = reminderPanelTopContentInset
+        self.reminderPanelAutoCloseDelay = reminderPanelAutoCloseDelay
     }
 
     init(defaults: UserDefaults) {
@@ -66,7 +70,8 @@ struct ReminderSettings: Equatable {
             reminderPanelOffsetX: defaults.double(forKey: Self.reminderPanelOffsetXKey),
             reminderPanelOffsetY: defaults.double(forKey: Self.reminderPanelOffsetYKey),
             reminderPanelWidth: defaults.object(forKey: Self.reminderPanelWidthKey) == nil ? 392 : max(320, defaults.double(forKey: Self.reminderPanelWidthKey)),
-            reminderPanelTopContentInset: defaults.object(forKey: Self.reminderPanelTopContentInsetKey) == nil ? Double(ReminderPresentationTiming.defaultPanelTopContentInset) : max(12, defaults.double(forKey: Self.reminderPanelTopContentInsetKey))
+            reminderPanelTopContentInset: defaults.object(forKey: Self.reminderPanelTopContentInsetKey) == nil ? Double(ReminderPresentationTiming.defaultPanelTopContentInset) : max(12, defaults.double(forKey: Self.reminderPanelTopContentInsetKey)),
+            reminderPanelAutoCloseDelay: defaults.object(forKey: Self.reminderPanelAutoCloseDelayKey) == nil ? ReminderPresentationTiming.defaultPanelAutoCloseDelay : min(15, max(1, defaults.double(forKey: Self.reminderPanelAutoCloseDelayKey)))
         )
     }
 
@@ -81,6 +86,7 @@ struct ReminderSettings: Equatable {
         defaults.set(reminderPanelOffsetY, forKey: Self.reminderPanelOffsetYKey)
         defaults.set(reminderPanelWidth, forKey: Self.reminderPanelWidthKey)
         defaults.set(reminderPanelTopContentInset, forKey: Self.reminderPanelTopContentInsetKey)
+        defaults.set(reminderPanelAutoCloseDelay, forKey: Self.reminderPanelAutoCloseDelayKey)
         NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
     }
 
@@ -153,7 +159,7 @@ enum ReminderPresentationPreviewAction {
 }
 
 enum ReminderPresentationTiming {
-    static let panelAutoCloseDelay: TimeInterval = 4
+    static let defaultPanelAutoCloseDelay: TimeInterval = 4
     static let flashDuration: TimeInterval = 2.15
     static let panelDelayAfterFlash: TimeInterval = flashDuration
     static let panelExpansionDuration: TimeInterval = 0.72
