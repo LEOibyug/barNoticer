@@ -118,17 +118,22 @@ struct ReminderSettings: Equatable {
         islandLayout.hotZoneFrame(in: screenFrame)
     }
 
-    func reminderPanelFrame(in screenFrame: CGRect, islandLayout: IslandLayoutSettings) -> CGRect {
-        CGRect(
+    func reminderPanelFrame(in screenFrame: CGRect, islandLayout: IslandLayoutSettings, safeAreaTop: CGFloat = 0) -> CGRect {
+        let height = ReminderPresentationTiming.panelBaseHeight + reminderContentTopInset(safeAreaTop: safeAreaTop)
+        return CGRect(
             x: screenFrame.midX - CGFloat(reminderPanelWidth) / 2 + CGFloat(reminderPanelOffsetX),
-            y: screenFrame.maxY - ReminderPresentationTiming.panelTopInset - reminderPanelHeight - CGFloat(reminderPanelOffsetY),
+            y: screenFrame.maxY - ReminderPresentationTiming.panelTopInset - height - CGFloat(reminderPanelOffsetY),
             width: CGFloat(reminderPanelWidth),
-            height: reminderPanelHeight
+            height: height
         )
     }
 
-    var reminderPanelHeight: CGFloat {
-        ReminderPresentationTiming.panelBaseHeight + CGFloat(reminderPanelTopContentInset)
+    func reminderContentTopInset(safeAreaTop: CGFloat) -> CGFloat {
+        // The view already has 16 points of padding. Leave another 8 points
+        // below the screen's safe area, accounting for the panel's position.
+        let minimumInset = safeAreaTop - ReminderPresentationTiming.panelTopInset
+            - CGFloat(reminderPanelOffsetY) - 16 + 8
+        return max(CGFloat(reminderPanelTopContentInset), minimumInset)
     }
 }
 

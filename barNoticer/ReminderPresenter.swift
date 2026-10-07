@@ -159,9 +159,11 @@ final class ReminderPresenter {
         let content = ReminderPanelContent.from(message: decision.message, explicitReferences: decision.todoReferences)
         let layout = IslandLayoutSettings(defaults: .standard)
         let settings = ReminderSettings(defaults: .standard)
-        let screenFrame = NSScreen.main?.frame ?? .zero
+        let screen = NSScreen.main
+        let screenFrame = screen?.frame ?? .zero
+        let safeAreaTop = screen?.safeAreaInsets.top ?? 0
         let hotZone = settings.reminderCollapsedFrame(in: screenFrame, islandLayout: layout)
-        let frame = settings.reminderPanelFrame(in: screenFrame, islandLayout: layout)
+        let frame = settings.reminderPanelFrame(in: screenFrame, islandLayout: layout, safeAreaTop: safeAreaTop)
 
         hidePanelImmediately()
         let panel = ReminderPanel(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
@@ -177,6 +179,7 @@ final class ReminderPresenter {
                 modelContext: modelContext,
                 historyStore: historyStore,
                 entryID: entryID,
+                topContentInset: settings.reminderContentTopInset(safeAreaTop: safeAreaTop),
                 close: { [weak self] in self?.hidePanel() }
             )
             .frame(width: frame.width, height: frame.height)
@@ -436,6 +439,7 @@ private struct ReminderPanelView: View {
     let modelContext: ModelContext
     let historyStore: ReminderHistoryStore
     let entryID: UUID
+    let topContentInset: CGFloat
     var close: () -> Void
 
     var body: some View {
@@ -453,30 +457,43 @@ private struct ReminderPanelView: View {
                 .foregroundStyle(.white.opacity(0.74))
             }
 
-            if !content.message.isEmpty {
-                Text(content.message)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.96))
-                    .lineSpacing(3)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if !content.message.isEmpty {
+                        Text(content.message)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.96))
+                            .lineSpacing(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
 
-            if !content.todoReferences.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("相关事项")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.76))
-                    ForEach(content.todoReferences, id: \.self) { id in
-                        ReminderTodoCard(todo: referencedTodo(id: id)) {
-                            completeTodo(id: id)
-                        } snooze: {
-                            historyStore.mark(id: entryID, status: .snoozed)
-                            close()
+                    if !content.todoReferences.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("相关事项")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.76))
+                            ForEach(content.todoReferences, id: \.self) { id in
+                                ReminderTodoCard(todo: referencedTodo(id: id)) {
+                                    completeTodo(id: id)
+                                } snooze: {
+                                    historyStore.mark(id: entryID, status: .snoozed)
+                                    close()
+                                }
+                            }
                         }
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(maxHeight: .infinity)
+
+            Button("知道了", action: close)
+                .buttonStyle(.borderedProminent)
+                .tint(.white.opacity(0.18))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, alignment: .trailing)
         }
+        .padding(.top, topContentInset)
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.black.opacity(0.94), in: RoundedRectangle(cornerRadius: 24, style: .continuous))

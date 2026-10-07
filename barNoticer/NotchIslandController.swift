@@ -112,6 +112,16 @@ final class NotchIslandController: NSObject {
         }
     }
 
+    fileprivate func pointerEnteredIsland(_ window: NSWindow?) {
+        // Tracking events may outlive the panel. Only the hot zone (or preview)
+        // may open it; entering the current panel only cancels a pending hide.
+        guard let islandPanel, window === islandPanel, islandPanel.isVisible,
+              !panelState.isClosing else { return }
+
+        hideWorkItem?.cancel()
+        hideWorkItem = nil
+    }
+
     func scheduleHideIsland() {
         guard hideWorkItem == nil else { return }
 
@@ -484,7 +494,7 @@ private final class IslandTrackingHostingView<Content: View>: NSHostingView<Cont
     }
 
     override func mouseEntered(with event: NSEvent) {
-        controller?.showIsland()
+        controller?.pointerEnteredIsland(window)
     }
 
     override func mouseExited(with event: NSEvent) {

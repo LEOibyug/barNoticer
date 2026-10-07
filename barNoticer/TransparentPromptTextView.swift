@@ -56,6 +56,15 @@ struct TransparentPromptEditor: NSViewRepresentable {
         field.target = context.coordinator
         field.action = #selector(Coordinator.submit)
         field.stringValue = text
+        // Keep the placeholder inside AppKit's text system so marked text
+        // hides it even before the input method updates the SwiftUI bindings.
+        field.placeholderAttributedString = NSAttributedString(
+            string: "询问 AI，或写下当日总结",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 18, weight: .medium),
+                .foregroundColor: NSColor.white.withAlphaComponent(AIAssistantPanelStyle.secondaryTextOpacity)
+            ]
+        )
         return field
     }
 
@@ -75,6 +84,9 @@ struct TransparentPromptEditor: NSViewRepresentable {
     }
 
     static func synchronize(_ field: TransparentPromptField, with text: String) {
+        // The binding contains committed text; replacing the editor's value
+        // here would discard the input method's in-progress composition.
+        guard (field.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return }
         if field.stringValue != text {
             field.stringValue = text
         }
@@ -111,15 +123,17 @@ struct TransparentPromptEditor: NSViewRepresentable {
 
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSTextField else { return }
+            let textView = field.currentEditor() as? NSTextView
+                ?? notification.userInfo?["NSFieldEditor"] as? NSTextView
+            isComposingText = textView?.hasMarkedText() == true
+            guard !isComposingText else { return }
             text = field.stringValue
-            if let textView = notification.userInfo?["NSFieldEditor"] as? NSTextView {
-                isComposingText = textView.hasMarkedText()
-            }
             try? AppDebugLogStore.shared.write(.debug, category: "AIInput", message: "Prompt field changed", metadata: ["length": "\(field.stringValue.count)"])
         }
 
         func controlTextDidBeginEditing(_ notification: Notification) {
-            guard let textView = notification.userInfo?["NSFieldEditor"] as? NSTextView else { return }
+            guard let textView = (notification.object as? NSTextField)?.currentEditor() as? NSTextView
+                ?? notification.userInfo?["NSFieldEditor"] as? NSTextView else { return }
             textView.insertionPointColor = .white
             textView.textColor = .white
             isComposingText = textView.hasMarkedText()
@@ -130,6 +144,7 @@ struct TransparentPromptEditor: NSViewRepresentable {
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard !textView.hasMarkedText() else { return false }
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
                 onSubmit()
                 return true

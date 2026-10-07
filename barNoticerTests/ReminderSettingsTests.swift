@@ -133,6 +133,35 @@ final class ReminderSettingsTests: XCTestCase {
         XCTAssertEqual(longDelay.reminderPanelAutoCloseDelay, 10)
     }
 
+    func testReminderContentClearsNotchWithMinimumUserInset() {
+        let settings = ReminderSettings(reminderPanelTopContentInset: 12)
+        let screen = CGRect(x: 0, y: 0, width: 1710, height: 1112)
+        let frame = settings.reminderPanelFrame(in: screen, islandLayout: IslandLayoutSettings(), safeAreaTop: 38)
+        let inset = settings.reminderContentTopInset(safeAreaTop: 38)
+
+        XCTAssertLessThanOrEqual(frame.maxY - 16 - inset, 1066)
+        XCTAssertEqual(frame.height - inset, 226)
+    }
+
+    func testReminderContentClearsNotchWhenPanelIsMovedUp() {
+        let settings = ReminderSettings(reminderPanelOffsetY: -24, reminderPanelTopContentInset: 12)
+        let screen = CGRect(x: 100, y: -200, width: 1710, height: 1112)
+        let frame = settings.reminderPanelFrame(in: screen, islandLayout: IslandLayoutSettings(), safeAreaTop: 38)
+        let inset = settings.reminderContentTopInset(safeAreaTop: 38)
+
+        XCTAssertLessThanOrEqual(frame.maxY - 16 - inset, 866)
+        XCTAssertEqual(frame.height - inset, 226)
+    }
+
+    func testReminderKeepsLargerUserInsetAndExternalDisplayLayout() {
+        let settings = ReminderSettings(reminderPanelTopContentInset: 60)
+        XCTAssertEqual(settings.reminderContentTopInset(safeAreaTop: 38), 60)
+        XCTAssertEqual(settings.reminderContentTopInset(safeAreaTop: 0), 60)
+
+        let lowered = ReminderSettings(reminderPanelOffsetY: 80, reminderPanelTopContentInset: 12)
+        XCTAssertEqual(lowered.reminderContentTopInset(safeAreaTop: 38), 12)
+    }
+
     func testReminderPresentationWaitsForGlowBeforeExpandingPanel() {
         XCTAssertEqual(ReminderPresentationTiming.panelDelayAfterFlash, ReminderPresentationTiming.flashDuration)
         XCTAssertGreaterThanOrEqual(ReminderPresentationTiming.flashDuration, 2)
