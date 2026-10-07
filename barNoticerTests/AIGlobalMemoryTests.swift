@@ -481,7 +481,7 @@ final class AIGlobalMemoryTests: XCTestCase {
         func buttons(in view: NSView) -> [NSButton] {
             (view as? NSButton).map { [$0] } ?? view.subviews.flatMap { buttons(in: $0) }
         }
-        let confirm = try XCTUnwrap(buttons(in: view).first { $0.title == "确认清空" })
+        let confirm = try XCTUnwrap(buttons(in: view).first { $0.title == "清空记忆" })
         confirm.performClick(nil)
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertTrue(try f.memory.read().entries.isEmpty)
@@ -525,8 +525,7 @@ final class AIGlobalMemoryTests: XCTestCase {
         init(confirmActions: Bool = true) throws {
             defaults = UserDefaults(suiteName: suite)!
             memory = AIGlobalMemoryStore(defaults: defaults)
-            container = try ModelContainer(for: TodoItem.self, TodoGroup.self, DailySummary.self,
-                                           configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+            container = try TestSupport.makeInMemoryContainer()
             executor = AIToolExecutor(modelContext: container.mainContext, memoryStore: memory)
             AISettings(baseURL: URL(string: "https://example.com/v1")!, model: "test", requiresActionConfirmation: confirmActions).save(to: defaults)
             keyStore = AIAPIKeyStore(defaults: defaults)

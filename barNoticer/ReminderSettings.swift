@@ -15,6 +15,7 @@ struct ReminderSettings: Equatable {
     private static let toneKey = "ReminderSettingsTone"
     private static let scheduledAIKey = "ReminderSettingsScheduledAIWording"
     private static let dedupeWindowKey = "ReminderSettingsDedupeWindow"
+    private static let haloBoundaryKey = "ReminderSettingsHaloBoundary"
     private static let hotZoneFlashExpansionKey = "ReminderSettingsHotZoneFlashExpansion"
     private static let reminderPanelOffsetXKey = "ReminderSettingsPanelOffsetX"
     private static let reminderPanelOffsetYKey = "ReminderSettingsPanelOffsetY"
@@ -28,6 +29,7 @@ struct ReminderSettings: Equatable {
     var systemNotificationsEnabled: Bool = true
     var tone: ReminderTone = .playful
     var dedupeWindow: TimeInterval = 1_800
+    var haloBoundary = ReminderHaloBoundary()
     var hotZoneFlashExpansion: Double = 18
     var reminderPanelOffsetX: Double = 0
     var reminderPanelOffsetY: Double = 0
@@ -77,10 +79,22 @@ struct ReminderSettings: Equatable {
             reminderPanelTopContentInset: defaults.object(forKey: Self.reminderPanelTopContentInsetKey) == nil ? Double(ReminderPresentationTiming.defaultPanelTopContentInset) : max(12, defaults.double(forKey: Self.reminderPanelTopContentInsetKey)),
             reminderPanelAutoCloseDelay: defaults.object(forKey: Self.reminderPanelAutoCloseDelayKey) == nil ? ReminderPresentationTiming.defaultPanelAutoCloseDelay : min(15, max(1, defaults.double(forKey: Self.reminderPanelAutoCloseDelayKey)))
         )
+        if let data = defaults.data(forKey: Self.haloBoundaryKey),
+           let boundary = try? JSONDecoder().decode(ReminderHaloBoundary.self, from: data) {
+            haloBoundary = boundary
+        } else {
+            let layout = IslandLayoutSettings(defaults: defaults)
+            haloBoundary = ReminderHaloBoundary(offsetY: -hotZoneFlashExpansion,
+                width: layout.hotZoneWidth + 2 * hotZoneFlashExpansion,
+                height: layout.hotZoneHeight + 2 * hotZoneFlashExpansion)
+        }
         scheduledAIWordingEnabled = defaults.object(forKey: Self.scheduledAIKey) == nil ? true : defaults.bool(forKey: Self.scheduledAIKey)
     }
 
     func save(to defaults: UserDefaults = .standard) {
+        if let data = try? JSONEncoder().encode(haloBoundary) {
+            defaults.set(data, forKey: Self.haloBoundaryKey)
+        }
         defaults.set(scheduledAIWordingEnabled, forKey: Self.scheduledAIKey)
         defaults.set(aiPollingEnabled, forKey: Self.aiPollingEnabledKey)
         defaults.set(pollingInterval, forKey: Self.pollingIntervalKey)
@@ -118,6 +132,19 @@ struct ReminderSettings: Equatable {
 
     static func endPresentationPreview() {
         NotificationCenter.default.post(name: previewDidEndNotification, object: nil)
+    }
+
+    /// Custom dimensions are anchored to the collapsed island's top center.
+    /// Positive Y moves down, matching the settings UI and other panel controls.
+    func haloBoundaryFrame(in screenFrame: CGRect, islandLayout: IslandLayoutSettings) -> CGRect {
+        let island = islandLayout.collapsedIslandFrame(in: screenFrame)
+        guard haloBoundary.isCustom else {
+            return island.insetBy(dx: -max(0, hotZoneFlashExpansion), dy: -max(0, hotZoneFlashExpansion))
+        }
+        let width = min(900, max(40, haloBoundary.width))
+        let height = min(400, max(12, haloBoundary.height))
+        return CGRect(x: island.midX + haloBoundary.offsetX - width / 2,
+            y: island.maxY - haloBoundary.offsetY - height, width: width, height: height)
     }
 
     func reminderCollapsedFrame(in screenFrame: CGRect, islandLayout: IslandLayoutSettings) -> CGRect {
@@ -171,21 +198,15 @@ enum ReminderPresentationPreviewAction {
 
 enum ReminderPresentationTiming {
     static let defaultPanelAutoCloseDelay: TimeInterval = 4
-    static let flashDuration: TimeInterval = 2.15
+    /// 先完整展示一次柔和光晕，再展开提醒，避免内容窗口遮住光效。
+    /// 光效时长不计入用户阅读时间；停留时长由 reminderPanelAutoCloseDelay 决定。
+    static let flashDuration: TimeInterval = 1.2
     static let panelDelayAfterFlash: TimeInterval = flashDuration
-    static let panelExpansionDuration: TimeInterval = 0.72
-    static let panelCollapseDuration: TimeInterval = 0.56
+    static let panelExpansionDuration: TimeInterval = 0.28
+    static let panelCollapseDuration: TimeInterval = 0.24
     static let panelTopInset: CGFloat = 8
     static let panelBaseHeight: CGFloat = 226
     static let defaultPanelTopContentInset: CGFloat = 34
-}
-
-enum ReminderFlashRippleStyle {
-    static let ringCount = 5
-    static let minimumExpansionStep: CGFloat = 4
-    static let staggerDelay: TimeInterval = 0.18
-    static let pulseDuration: TimeInterval = 1.02
-    static let totalDuration: TimeInterval = pulseDuration + staggerDelay * Double(ringCount - 1)
 }
 
 enum ReminderTone: String, CaseIterable, Identifiable, Codable {
@@ -216,4 +237,14 @@ enum ReminderTone: String, CaseIterable, Identifiable, Codable {
             return "催促感强、直接，但不要辱骂用户。"
         }
     }
+}
+
+/// Stored separately from the island's hit target so visual alignment never changes interaction.
+struct ReminderHaloBoundary: Codable, Equatable {
+    var isCustom = false
+    var offsetX: Double = 0
+    var offsetY: Double = 0
+    var width: Double = 256
+    var height: Double = 72
+    var cornerRadius: Double = 24
 }

@@ -64,31 +64,12 @@ final class AIAssistantPanelPresentationTests: XCTestCase {
         )
     }
 
-    func testAssistantPanelStyleUsesHighContrastDarkSurfaces() {
-        XCTAssertGreaterThanOrEqual(AIAssistantPanelStyle.panelBackgroundOpacity, 0.92)
-        XCTAssertGreaterThanOrEqual(AIAssistantPanelStyle.inputBackgroundOpacity, 0.68)
-        XCTAssertGreaterThanOrEqual(AIAssistantPanelStyle.responseBackgroundOpacity, 0.68)
-        XCTAssertGreaterThanOrEqual(AIAssistantPanelStyle.proposalBackgroundOpacity, 0.58)
-        XCTAssertGreaterThanOrEqual(AIAssistantPanelStyle.todoCardBackgroundOpacity, 0.52)
-        XCTAssertGreaterThanOrEqual(AIAssistantPanelStyle.secondaryTextOpacity, 0.84)
-        XCTAssertGreaterThanOrEqual(AIAssistantPanelStyle.tertiaryTextOpacity, 0.74)
-        XCTAssertGreaterThanOrEqual(AIAssistantPanelStyle.subtleTextOpacity, 0.72)
-    }
-
-    func testAssistantProgressOverlaysPromptInsteadOfAddingInputSubrow() {
-        XCTAssertEqual(AIAssistantPanelStyle.progressPlacement, .promptOverlay)
-        XCTAssertEqual(AIAssistantPanelStyle.promptFieldHeight, 28)
-    }
-
-    func testAssistantResponseScrollViewResetsWhenContentChanges() {
-        XCTAssertTrue(AIAssistantPanelStyle.resetsResponseScrollOnContentChange)
-    }
-
-    func testAssistantPanelUsesDarkAppearanceForMaterialSampling() {
+    func testAssistantPanelFollowsSystemAppearanceForMaterialAndEditors() {
         let panel = AIAssistantPanelChrome.makePanel(contentView: NSView())
 
-        XCTAssertEqual(panel.appearance?.name, .darkAqua)
-        XCTAssertEqual(panel.contentView?.appearance?.name, .darkAqua)
+        // 面板不再强制深色：SwiftUI 材质与 AppKit 编辑器随系统浅/深色自适应。
+        XCTAssertNil(panel.appearance)
+        XCTAssertNil(panel.contentView?.appearance)
     }
 
     func testAssistantPanelClipsContentToRoundedBounds() throws {
@@ -105,7 +86,7 @@ final class AIAssistantPanelPresentationTests: XCTestCase {
 
         XCTAssertFalse(field.drawsBackground)
         XCTAssertEqual(field.backgroundColor, .clear)
-        XCTAssertEqual(field.textColor, .white)
+        XCTAssertEqual(field.textColor, .labelColor)
         XCTAssertTrue(field.isEditable)
         XCTAssertTrue(field.isSelectable)
         XCTAssertFalse(field.isBordered)

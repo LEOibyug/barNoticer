@@ -13,6 +13,7 @@ final class ReminderScheduler {
     private var pollTimer: Timer?
     private var settings: ReminderSettings
     private var isChecking = false
+    private var isStarted = false
     private let scheduledReminders: ScheduledReminderScheduler
 
     init(
@@ -46,20 +47,34 @@ final class ReminderScheduler {
         pollTimer?.invalidate()
     }
 
+    /// start 幂等；用户主动定时提醒（scheduledReminders）与 AI 判断相互独立启停。
     func start() {
+        guard !isStarted else { return }
+        isStarted = true
         scheduledReminders.start()
-        installDeadlineTimer()
-        installPollTimer()
+        installAITimers()
         Task { await checkDeadlineTriggers(now: Date()) }
     }
 
     @objc private func settingsChanged() {
         settings = ReminderSettings(defaults: defaults)
+        installAITimers()
+    }
+
+    /// aiPollingEnabled 为 false 时，AI 轮询 timer 和默认 DDL 扫描 timer 均不存在；
+    /// 用户主动定时提醒不受影响。
+    private func installAITimers() {
+        installDeadlineTimer()
         installPollTimer()
     }
 
+    /// 测试与诊断用：AI 轮询与默认 DDL 扫描 timer 是否存在（与用户主动定时提醒相互独立）。
+    var aiTimersArmed: Bool { deadlineTimer != nil || pollTimer != nil }
+
     private func installDeadlineTimer() {
         deadlineTimer?.invalidate()
+        deadlineTimer = nil
+        guard settings.aiPollingEnabled else { return }
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 await self?.checkDeadlineTriggers(now: Date())

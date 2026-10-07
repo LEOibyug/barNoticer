@@ -77,10 +77,7 @@ final class TodoSortingTests: XCTestCase {
 
     @MainActor
     func testBootstrapRenamesExistingDefaultGroupFromInbox() throws {
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         let legacyGroup = TodoGroup(id: TodoGroup.defaultGroupID, name: "收件箱", colorHex: "#3B82F6", sortOrder: 9)
         container.mainContext.insert(legacyGroup)
         try container.mainContext.save()

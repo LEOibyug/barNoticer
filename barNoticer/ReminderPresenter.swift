@@ -9,7 +9,10 @@ final class ReminderPresenter: AIAssistantReplyPresenting, ReminderPresenting {
     private let historyStore: ReminderHistoryStore
     private let logStore: AppDebugLogStore
     private let defaults: UserDefaults
+    private let notifications: NotificationCenter
+    private let reduceMotion: @MainActor () -> Bool
     private var flashPanel: NSPanel?
+    private var boundaryPanel: NSPanel?
     private var reminderPanel: NSPanel?
     private var previewGeneration = 0
     private var pendingAssistantReplyID: UUID?
@@ -28,32 +31,40 @@ final class ReminderPresenter: AIAssistantReplyPresenting, ReminderPresenting {
         modelContext: ModelContext,
         historyStore: ReminderHistoryStore = ReminderHistoryStore(),
         logStore: AppDebugLogStore = .shared,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        notifications: NotificationCenter = .default,
+        reduceMotion: @escaping @MainActor () -> Bool = { MotionPreferences.reduceMotion }
     ) {
         self.modelContext = modelContext
         self.historyStore = historyStore
         self.logStore = logStore
         self.defaults = defaults
+        self.notifications = notifications
+        self.reduceMotion = reduceMotion
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(accessibilityChanged),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil
+        )
 
-        NotificationCenter.default.addObserver(
+        notifications.addObserver(
             self,
             selector: #selector(previewChanged(_:)),
             name: ReminderSettings.previewDidChangeNotification,
             object: nil
         )
-        NotificationCenter.default.addObserver(
+        notifications.addObserver(
             self,
             selector: #selector(boundaryPreviewChanged(_:)),
             name: ReminderSettings.boundaryPreviewDidChangeNotification,
             object: nil
         )
-        NotificationCenter.default.addObserver(
+        notifications.addObserver(
             self,
             selector: #selector(panelPreviewChanged),
             name: ReminderSettings.panelPreviewDidChangeNotification,
             object: nil
         )
-        NotificationCenter.default.addObserver(
+        notifications.addObserver(
             self,
             selector: #selector(previewEnded),
             name: ReminderSettings.previewDidEndNotification,
@@ -62,7 +73,20 @@ final class ReminderPresenter: AIAssistantReplyPresenting, ReminderPresenting {
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
+        notifications.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
+
+    @objc private func accessibilityChanged() {
+        (boundaryPanel?.contentView as? ReminderHaloView)?.updateAppearance()
+        guard let view = flashPanel?.contentView as? ReminderHaloView else { return }
+        if reduceMotion(), !view.isPreview {
+            flashPanel?.orderOut(nil)
+            flashPanel = nil
+            assistantFlashPanel = nil
+        } else {
+            view.updateAppearance()
+        }
     }
 
     func present(decision: ReminderDecision, trigger: ReminderTrigger, settings: ReminderSettings, timestamp: Date = Date()) {
@@ -73,14 +97,19 @@ final class ReminderPresenter: AIAssistantReplyPresenting, ReminderPresenting {
 
         let entry = ReminderHistoryEntry(trigger: trigger, decision: decision, timestamp: timestamp)
         historyStore.record(entry)
-        showFlash(expansion: settings.hotZoneFlashExpansion)
-        if settings.systemNotificationsEnabled {
-            Task { await sendSystemNotification(decision: decision) }
+        // 先展示光晕再出现内容；减少动态效果时不做光效、无人为等待。
+        let reduceMotion = reduceMotion()
+        if !reduceMotion {
+            showFlash(expansion: settings.hotZoneFlashExpansion)
         }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + ReminderPresentationTiming.panelDelayAfterFlash) { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.showPanel(decision: decision, entryID: entry.id)
+        let delay = reduceMotion ? 0 : ReminderPresentationTiming.panelDelayAfterFlash
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            // Present on this main-queue turn, as replies do, so an extra Task
+            // cannot let a later reply overtake an earlier reminder.
+            self.showPanel(decision: decision, entryID: entry.id)
+            if settings.systemNotificationsEnabled {
+                Task { await self.sendSystemNotification(decision: decision) }
             }
         }
     }
@@ -90,9 +119,13 @@ final class ReminderPresenter: AIAssistantReplyPresenting, ReminderPresenting {
         let id = UUID()
         pendingAssistantReplyID = id
         let settings = ReminderSettings(defaults: defaults)
-        showFlash(expansion: settings.hotZoneFlashExpansion)
+        let reduceMotion = reduceMotion()
+        if !reduceMotion {
+            showFlash(expansion: settings.hotZoneFlashExpansion)
+        }
         assistantFlashPanel = flashPanel
-        DispatchQueue.main.asyncAfter(deadline: .now() + ReminderPresentationTiming.panelDelayAfterFlash) { [weak self] in
+        let delay = reduceMotion ? 0 : ReminderPresentationTiming.panelDelayAfterFlash
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.pendingAssistantReplyID == id else { return }
             self.pendingAssistantReplyID = nil
             self.showPanel(
@@ -127,11 +160,14 @@ final class ReminderPresenter: AIAssistantReplyPresenting, ReminderPresenting {
     }
 
     private func showFlash(expansion: Double, animated: Bool, duration: TimeInterval?) {
-        let settings = IslandLayoutSettings(defaults: .standard)
-        let hotZone = settings.hotZoneFrame(in: NSScreen.main?.frame ?? .zero)
-        let frame = hotZone.insetBy(dx: -expansion, dy: -expansion)
+        let layout = IslandLayoutSettings(defaults: defaults)
+        var settings = ReminderSettings(defaults: defaults)
+        settings.hotZoneFlashExpansion = expansion
+        let boundary = settings.haloBoundaryFrame(in: NSScreen.main?.frame ?? .zero, islandLayout: layout)
+        let frame = boundary.insetBy(dx: -ReminderHaloView.drawingInset, dy: -ReminderHaloView.drawingInset)
 
-        flashPanel?.orderOut(nil)
+        if animated { flashPanel?.orderOut(nil) }
+        else { boundaryPanel?.orderOut(nil) }
         let panel = NSPanel(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         panel.level = .statusBar
         panel.isOpaque = false
@@ -139,13 +175,16 @@ final class ReminderPresenter: AIAssistantReplyPresenting, ReminderPresenting {
         panel.hasShadow = false
         panel.ignoresMouseEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-        let view = ReminderFlashView(frame: CGRect(origin: .zero, size: frame.size), expansion: CGFloat(expansion))
+        let view = ReminderHaloView(frame: CGRect(origin: .zero, size: frame.size), isPreview: !animated,
+            cornerRadius: settings.haloBoundary.isCustom ? settings.haloBoundary.cornerRadius : 24)
         panel.contentView = view
-        flashPanel = panel
-        panel.orderFrontRegardless()
         if animated {
-            view.startFlashing()
+            flashPanel = panel
+            view.startPulse()
+        } else {
+            boundaryPanel = panel
         }
+        panel.orderFrontRegardless()
 
         if let duration {
             DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self, weak panel] in
@@ -157,12 +196,16 @@ final class ReminderPresenter: AIAssistantReplyPresenting, ReminderPresenting {
     }
 
     @objc private func previewChanged(_ notification: Notification) {
+        // Replaying an example must not leave the previous content over the new halo.
+        hidePanelImmediately()
         previewGeneration += 1
         let generation = previewGeneration
         let expansion = notification.userInfo?[ReminderSettings.previewHotZoneFlashExpansionUserInfoKey] as? Double
-            ?? ReminderSettings(defaults: .standard).hotZoneFlashExpansion
-        showFlash(expansion: expansion)
-        DispatchQueue.main.asyncAfter(deadline: .now() + ReminderPresentationTiming.panelDelayAfterFlash) { [weak self] in
+            ?? ReminderSettings(defaults: defaults).hotZoneFlashExpansion
+        let reduceMotion = reduceMotion()
+        if !reduceMotion { showFlash(expansion: expansion) }
+        let delay = reduceMotion ? 0 : ReminderPresentationTiming.panelDelayAfterFlash
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, generation == self.previewGeneration else { return }
                 self.showPreviewPanel()
@@ -173,12 +216,14 @@ final class ReminderPresenter: AIAssistantReplyPresenting, ReminderPresenting {
     @objc private func boundaryPreviewChanged(_ notification: Notification) {
         previewGeneration += 1
         let expansion = notification.userInfo?[ReminderSettings.previewHotZoneFlashExpansionUserInfoKey] as? Double
-            ?? ReminderSettings(defaults: .standard).hotZoneFlashExpansion
+            ?? ReminderSettings(defaults: defaults).hotZoneFlashExpansion
         hidePanel()
         showBoundary(expansion: expansion)
     }
 
     @objc private func panelPreviewChanged() {
+        boundaryPanel?.orderOut(nil)
+        boundaryPanel = nil
         previewGeneration += 1
         flashPanel?.orderOut(nil)
         flashPanel = nil
@@ -186,6 +231,8 @@ final class ReminderPresenter: AIAssistantReplyPresenting, ReminderPresenting {
     }
 
     @objc private func previewEnded() {
+        boundaryPanel?.orderOut(nil)
+        boundaryPanel = nil
         previewGeneration += 1
         flashPanel?.orderOut(nil)
         flashPanel = nil
@@ -226,7 +273,7 @@ final class ReminderPresenter: AIAssistantReplyPresenting, ReminderPresenting {
         panel.level = .statusBar
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = false
+        panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         let hostingView = NSHostingView(
@@ -255,7 +302,11 @@ final class ReminderPresenter: AIAssistantReplyPresenting, ReminderPresenting {
         panel.alphaValue = 1
         panel.setFrame(frame, display: false)
         panel.orderFrontRegardless()
-        revealView.animateExpansion(duration: ReminderPresentationTiming.panelExpansionDuration)
+        if reduceMotion() {
+            revealView.showImmediately()
+        } else {
+            revealView.animateExpansion(duration: ReminderPresentationTiming.panelExpansionDuration)
+        }
 
         if autoClose {
             let closeDelay = ReminderPresentationTiming.panelExpansionDuration + settings.reminderPanelAutoCloseDelay
@@ -277,7 +328,9 @@ final class ReminderPresenter: AIAssistantReplyPresenting, ReminderPresenting {
                 self.showNextPanel()
             }
         }
-        if let revealView = panel.contentView as? ReminderPanelRevealView {
+        if reduceMotion() {
+            complete()
+        } else if let revealView = panel.contentView as? ReminderPanelRevealView {
             revealView.animateCollapse(duration: ReminderPresentationTiming.panelCollapseDuration, completion: complete)
         } else {
             complete()
@@ -357,6 +410,14 @@ private final class ReminderPanelRevealView: NSView, CAAnimationDelegate {
         contentView.frame = geometry.contentFrame
     }
 
+    /// 减少动态效果：直接呈现最终形状，不播放路径揭幕。
+    func showImmediately() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        maskLayer.path = path(for: geometry.contentFrame).cgPath
+        CATransaction.commit()
+    }
+
     func animateExpansion(duration: TimeInterval) {
         animateMask(
             from: geometry.collapsedFrameInContentCoordinates,
@@ -415,95 +476,6 @@ private final class ReminderPanelRevealView: NSView, CAAnimationDelegate {
     }
 }
 
-private final class ReminderFlashView: NSView {
-    private let expansion: CGFloat
-    private var ringLayers: [CALayer] = []
-
-    init(frame frameRect: NSRect, expansion: CGFloat) {
-        self.expansion = max(0, expansion)
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.clear.cgColor
-        ringLayers = (0..<ReminderFlashRippleStyle.ringCount).map { index in
-            let ring = CALayer()
-            ring.backgroundColor = NSColor.clear.cgColor
-            ring.borderColor = NSColor.systemYellow.withAlphaComponent(0.88 - CGFloat(index) * 0.08).cgColor
-            ring.borderWidth = 2
-            ring.cornerCurve = .continuous
-            ring.opacity = 0
-            ring.shadowColor = NSColor.systemYellow.cgColor
-            ring.shadowOpacity = 0.5
-            ring.shadowRadius = 7
-            ring.shadowOffset = .zero
-            layer?.addSublayer(ring)
-            return ring
-        }
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    override func layout() {
-        super.layout()
-        for (index, ring) in ringLayers.enumerated() {
-            let progress = CGFloat(index) / CGFloat(max(1, ReminderFlashRippleStyle.ringCount - 1))
-            let minimumOutset = CGFloat(index) * ReminderFlashRippleStyle.minimumExpansionStep
-            let outset = max(expansion * progress, minimumOutset)
-            let frame = bounds.insetBy(dx: expansion - outset, dy: expansion - outset)
-            ring.frame = frame
-            ring.cornerRadius = min(frame.height / 2, 18 + outset * 0.42)
-            ring.shadowPath = CGPath(
-                roundedRect: ring.bounds,
-                cornerWidth: ring.cornerRadius,
-                cornerHeight: ring.cornerRadius,
-                transform: nil
-            )
-        }
-    }
-
-    func startFlashing() {
-        for (index, ring) in ringLayers.enumerated() {
-            let begin = CACurrentMediaTime() + Double(index) * ReminderFlashRippleStyle.staggerDelay
-
-            let opacity = CAKeyframeAnimation(keyPath: "opacity")
-            opacity.values = [0, 0.96, 0.58, 0.18, 0]
-            opacity.keyTimes = [0, 0.16, 0.44, 0.74, 1]
-            opacity.duration = ReminderFlashRippleStyle.pulseDuration
-            opacity.beginTime = begin
-            opacity.timingFunctions = [
-                CAMediaTimingFunction(name: .easeOut),
-                CAMediaTimingFunction(name: .easeInEaseOut),
-                CAMediaTimingFunction(name: .easeIn)
-            ]
-            opacity.fillMode = .both
-            opacity.isRemovedOnCompletion = false
-
-            let width = CAKeyframeAnimation(keyPath: "borderWidth")
-            width.values = [1.1, 3.2, 2.1, 0.8]
-            width.keyTimes = [0, 0.22, 0.62, 1]
-            width.duration = ReminderFlashRippleStyle.pulseDuration
-            width.beginTime = begin
-            width.fillMode = .both
-            width.isRemovedOnCompletion = false
-
-            let scale = CABasicAnimation(keyPath: "transform.scale")
-            scale.fromValue = 0.98
-            scale.toValue = 1.035
-            scale.duration = ReminderFlashRippleStyle.pulseDuration
-            scale.beginTime = begin
-            scale.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            scale.fillMode = .both
-            scale.isRemovedOnCompletion = false
-
-            ring.add(opacity, forKey: "reminderRippleOpacity")
-            ring.add(width, forKey: "reminderRippleWidth")
-            ring.add(scale, forKey: "reminderRippleScale")
-        }
-    }
-}
-
 private struct ReminderPanelView: View {
     let content: ReminderPanelContent
     let modelContext: ModelContext
@@ -546,8 +518,9 @@ private struct ReminderPanelView: View {
                             Text("相关事项")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.white.opacity(0.76))
+                            let todoMap = AITodoLookup.referencedTodoMap(ids: content.todoReferences, in: modelContext)
                             ForEach(content.todoReferences, id: \.self) { id in
-                                ReminderTodoCard(todo: referencedTodo(id: id)) {
+                                ReminderTodoCard(todo: todoMap[id] ?? .missing(id: id)) {
                                     completeTodo(id: id)
                                 } snooze: {
                                     if let entryID { historyStore.mark(id: entryID, status: .snoozed) }
@@ -585,17 +558,7 @@ private struct ReminderPanelView: View {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(.white.opacity(0.28), lineWidth: 1)
         }
-        .shadow(color: .black.opacity(0.38), radius: 30, y: 16)
         .environment(\.colorScheme, .dark)
-    }
-
-    private func referencedTodo(id: UUID) -> AIReferencedTodo {
-        guard let item = (try? modelContext.fetch(FetchDescriptor<TodoItem>()))?.first(where: { $0.id == id }) else {
-            return AIReferencedTodo(id: id, title: "事项", priority: .low, groupName: nil, scheduleText: nil, createdAt: nil, isCompleted: false, exists: false)
-        }
-        let groups = (try? modelContext.fetch(FetchDescriptor<TodoGroup>())) ?? []
-        let group = TodoGroupResolver.group(for: item, groups: groups)
-        return AIReferencedTodo(id: id, title: item.title, priority: item.priority, groupName: group.name, scheduleText: TodoDeadlineFormatter.cardText(for: item), createdAt: item.createdAt, isCompleted: item.isCompleted, exists: true)
     }
 
     private func completeTodo(id: UUID) {

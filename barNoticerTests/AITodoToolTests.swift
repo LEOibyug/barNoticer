@@ -58,10 +58,7 @@ final class AITodoToolTests: XCTestCase {
 
     @MainActor
     func testDeleteTodoToolCreatesPendingProposalAndAppliesDeletion() throws {
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         let item = TodoItem(title: "Remove me", priority: .medium)
         container.mainContext.insert(item)
         try container.mainContext.save()
@@ -83,10 +80,7 @@ final class AITodoToolTests: XCTestCase {
 
     @MainActor
     func testAssistantAppliesProposalsImmediatelyWhenConfirmationIsDisabled() throws {
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         let model = AIAssistantModel(modelContext: container.mainContext)
 
         model.stageOrApply(
@@ -101,10 +95,7 @@ final class AITodoToolTests: XCTestCase {
 
     @MainActor
     func testApplyingCreateTodoUsesProposalIDAndReturnsCreatedReference() throws {
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         let executor = AIToolExecutor(modelContext: container.mainContext)
         let id = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
 
@@ -118,10 +109,7 @@ final class AITodoToolTests: XCTestCase {
 
     @MainActor
     func testAssistantKeepsProposalsPendingWhenConfirmationIsEnabled() throws {
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         let model = AIAssistantModel(modelContext: container.mainContext)
         let proposal = AIActionProposal.createTodo(title: "Write paper", priority: .high)
 
@@ -134,10 +122,7 @@ final class AITodoToolTests: XCTestCase {
 
     @MainActor
     func testAssistantCanApplyAndDismissProposalBatches() throws {
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         let model = AIAssistantModel(modelContext: container.mainContext)
         let proposals: [AIActionProposal] = [
             .createTodo(title: "First batch item", priority: .high),
@@ -170,10 +155,7 @@ final class AITodoToolTests: XCTestCase {
 
     @MainActor
     func testCreateTodoToolAcceptsGroupAndDeadline() throws {
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         let group = TodoGroup(name: "工作", colorHex: "#3B82F6", sortOrder: 1)
         container.mainContext.insert(group)
         let executor = AIToolExecutor(modelContext: container.mainContext)
@@ -197,10 +179,7 @@ final class AITodoToolTests: XCTestCase {
 
     @MainActor
     func testCreateTodoToolAcceptsMultipleTimesAndRecurrence() throws {
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         let executor = AIToolExecutor(modelContext: container.mainContext)
         let call = AIToolCall(
             id: "create-schedule-call",
@@ -226,10 +205,7 @@ final class AITodoToolTests: XCTestCase {
 
     @MainActor
     func testCreateTodoToolAcceptsCustomDailyRecurrence() throws {
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         let executor = AIToolExecutor(modelContext: container.mainContext)
         let call = AIToolCall(
             id: "create-custom-recurrence-call",
@@ -251,10 +227,7 @@ final class AITodoToolTests: XCTestCase {
 
     @MainActor
     func testRecurringTodoCompletionProposalRollsForwardInsteadOfCompleting() throws {
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         let anchor = ISO8601DateFormatter().date(from: "2026-05-24T09:00:00Z")!
         let item = TodoItem(title: "每日站会", recurrenceRule: .daily, recurrenceAnchor: anchor)
         container.mainContext.insert(item)
@@ -270,10 +243,7 @@ final class AITodoToolTests: XCTestCase {
 
     @MainActor
     func testGroupToolsCreateUpdateListAndDeleteGroups() throws {
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         let executor = AIToolExecutor(modelContext: container.mainContext)
         let create = AIToolCall(
             id: "group-create",

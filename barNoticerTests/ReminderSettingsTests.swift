@@ -162,14 +162,9 @@ final class ReminderSettingsTests: XCTestCase {
         XCTAssertEqual(lowered.reminderContentTopInset(safeAreaTop: 38), 12)
     }
 
-    func testReminderPresentationWaitsForGlowBeforeExpandingPanel() {
+    func testReminderPanelWaitsForHaloToFinish() {
+        XCTAssertGreaterThanOrEqual(ReminderPresentationTiming.flashDuration, 1)
         XCTAssertEqual(ReminderPresentationTiming.panelDelayAfterFlash, ReminderPresentationTiming.flashDuration)
-        XCTAssertGreaterThanOrEqual(ReminderPresentationTiming.flashDuration, 2)
-    }
-
-    func testReminderPanelUsesIslandLikeShapeAnimationTiming() {
-        XCTAssertGreaterThanOrEqual(ReminderPresentationTiming.panelExpansionDuration, IslandAnimationTimings.modeSwitchDuration)
-        XCTAssertGreaterThan(ReminderPresentationTiming.panelCollapseDuration, 0.5)
     }
 
     func testReminderPanelRevealKeepsContentAtFinalLayoutSizeDuringAnimation() {
@@ -180,14 +175,6 @@ final class ReminderSettingsTests: XCTestCase {
 
         XCTAssertEqual(geometry.contentFrame, CGRect(x: 0, y: 0, width: 400, height: 260))
         XCTAssertEqual(geometry.collapsedFrameInContentCoordinates, CGRect(x: 100, y: 220, width: 200, height: 36))
-    }
-
-    func testReminderFlashUsesStaggeredExpandingBorderRings() {
-        XCTAssertGreaterThanOrEqual(ReminderFlashRippleStyle.ringCount, 5)
-        XCTAssertGreaterThan(ReminderFlashRippleStyle.minimumExpansionStep, 0)
-        XCTAssertGreaterThan(ReminderFlashRippleStyle.staggerDelay, 0)
-        XCTAssertGreaterThan(ReminderFlashRippleStyle.totalDuration, ReminderFlashRippleStyle.pulseDuration)
-        XCTAssertGreaterThan(ReminderFlashRippleStyle.pulseDuration, 1)
     }
 
     func testReminderSettingsCanEndPresentationPreview() {

@@ -26,7 +26,7 @@ final class TransparentPromptField: NSTextField {
         isBezeled = false
         drawsBackground = false
         backgroundColor = .clear
-        textColor = .white
+        textColor = .labelColor
         font = .systemFont(ofSize: 18, weight: .medium)
         placeholderString = nil
         isEditable = true
@@ -60,7 +60,7 @@ struct TransparentPromptEditor: NSViewRepresentable {
         field.isBezeled = false
         field.drawsBackground = false
         field.font = .systemFont(ofSize: 18, weight: .medium)
-        field.textColor = .white
+        field.textColor = .labelColor
         field.isEditable = true
         field.isSelectable = true
         cell.isScrollable = true
@@ -75,7 +75,7 @@ struct TransparentPromptEditor: NSViewRepresentable {
             string: "询问 AI，或写下当日总结",
             attributes: [
                 .font: NSFont.systemFont(ofSize: 18, weight: .medium),
-                .foregroundColor: NSColor.white.withAlphaComponent(AIAssistantPanelStyle.secondaryTextOpacity)
+                .foregroundColor: NSColor.secondaryLabelColor
             ]
         )
         return field
@@ -105,7 +105,7 @@ struct TransparentPromptEditor: NSViewRepresentable {
         if field.stringValue != text {
             field.stringValue = text
         }
-        field.textColor = .white
+        field.textColor = .labelColor
     }
 
     func makeCoordinator() -> Coordinator {
@@ -149,8 +149,8 @@ struct TransparentPromptEditor: NSViewRepresentable {
         func controlTextDidBeginEditing(_ notification: Notification) {
             guard let textView = (notification.object as? NSTextField)?.currentEditor() as? NSTextView
                 ?? notification.userInfo?["NSFieldEditor"] as? NSTextView else { return }
-            textView.insertionPointColor = .white
-            textView.textColor = .white
+            textView.insertionPointColor = .labelColor
+            textView.textColor = .labelColor
             isComposingText = textView.hasMarkedText()
         }
 

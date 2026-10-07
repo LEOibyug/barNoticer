@@ -24,6 +24,19 @@ final class TodoGroup {
         id != Self.defaultGroupID
     }
 
+    /// 预设颜色的中文名；hex 仅留在数据层，不作为用户文案。
+    static func colorName(for hex: String) -> String {
+        switch hex.uppercased() {
+        case "#64748B": "石板灰"
+        case "#3B82F6": "蓝色"
+        case "#22C55E": "绿色"
+        case "#F59E0B": "琥珀橙"
+        case "#EF4444": "红色"
+        case "#A855F7": "紫色"
+        default: "自定义"
+        }
+    }
+
     var color: Color {
         Color(hex: colorHex) ?? .secondary
     }
@@ -70,6 +83,22 @@ enum TodoGroupResolver {
             }
             return lhs.createdAt < rhs.createdAt
         }
+    }
+
+    /// 一次性构造 ID → 分组索引；未知分组与无分组事项由 groupID(for:index:) 回退默认分组。
+    static func indexedByID(_ groups: [TodoGroup]) -> [UUID: TodoGroup] {
+        var byID = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0) })
+        if byID[TodoGroup.defaultGroupID] == nil {
+            byID[TodoGroup.defaultGroupID] = .defaultGroup
+        }
+        return byID
+    }
+
+    static func groupID(for item: TodoItem, index: [UUID: TodoGroup]) -> UUID {
+        guard let groupID = item.groupID, index[groupID] != nil else {
+            return TodoGroup.defaultGroupID
+        }
+        return groupID
     }
 
     static func group(for item: TodoItem, groups: [TodoGroup]) -> TodoGroup {

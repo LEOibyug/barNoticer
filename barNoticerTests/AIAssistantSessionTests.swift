@@ -219,8 +219,7 @@ final class AIAssistantSessionTests: XCTestCase {
             AISettings(baseURL: URL(string: "https://example.com/v1")!, model: "test", requiresActionConfirmation: confirmActions).save(to: defaults)
             let keyStore = AIAPIKeyStore(defaults: defaults)
             keyStore.saveAPIKey("test-key")
-            container = try ModelContainer(for: TodoItem.self, TodoGroup.self, DailySummary.self,
-                                           configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+            container = try TestSupport.makeInMemoryContainer()
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [SessionURLProtocol.self]
             SessionURLProtocol.responses = []

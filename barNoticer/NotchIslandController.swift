@@ -87,7 +87,7 @@ final class NotchIslandController: NSObject {
         islandPanel.orderFrontRegardless()
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = plan.duration
+            context.duration = MotionPreferences.reduceMotion ? 0 : plan.duration
             context.timingFunction = showTimingFunction
             islandPanel.animator().setFrame(plan.endFrame, display: true)
         } completionHandler: { [weak self, transition] in
@@ -104,9 +104,9 @@ final class NotchIslandController: NSObject {
                 }
 
                 NSAnimationContext.runAnimationGroup { context in
-                    context.duration = plan.contentFadeDuration
+                    context.duration = MotionPreferences.reduceMotion ? 0 : plan.contentFadeDuration
                     context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                    self.setIslandContentVisibility(true, animated: true)
+                    self.setIslandContentVisibility(true, animated: !MotionPreferences.reduceMotion)
                 }
             }
         }
@@ -161,9 +161,9 @@ final class NotchIslandController: NSObject {
         let transition = panelState.beginHiding(suppressShowingDuration: hideAnimation.duration + hideInterruptionSuppression)
         let plan = expansionPlan()
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = hideAnimation.duration
+            context.duration = MotionPreferences.reduceMotion ? 0 : hideAnimation.duration
             context.timingFunction = hideAnimation.timingFunction
-            self.setIslandContentVisibility(false, animated: true)
+            self.setIslandContentVisibility(false, animated: !MotionPreferences.reduceMotion)
             islandPanel.animator().setFrame(plan.startFrame, display: true)
         } completionHandler: { [weak self, transition] in
             Task { @MainActor [weak self, transition] in
@@ -326,7 +326,7 @@ final class NotchIslandController: NSObject {
         }
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = resizeAnimation.duration
+            context.duration = MotionPreferences.reduceMotion ? 0 : resizeAnimation.duration
             context.timingFunction = resizeAnimation.timingFunction
             islandPanel.animator().setFrame(islandFrame(), display: true)
         }
@@ -358,7 +358,7 @@ final class NotchIslandController: NSObject {
     }
 
     private func setIslandContentVisibility(_ isVisible: Bool, animated: Bool = false) {
-        if animated {
+        if animated, !MotionPreferences.reduceMotion {
             withAnimation(.easeOut(duration: 0.24)) {
                 contentVisibility.isVisible = isVisible
             }

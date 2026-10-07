@@ -1,30 +1,14 @@
 import SwiftUI
 
 enum AIAssistantPanelStyle {
-    enum ProgressPlacement {
-        case promptOverlay
-    }
-
-    static let progressPlacement: ProgressPlacement = .promptOverlay
     static let promptFieldHeight: CGFloat = 28
-    static let panelBackgroundOpacity = 0.94
-    static let inputBackgroundOpacity = 0.72
-    static let responseBackgroundOpacity = 0.72
-    static let proposalBackgroundOpacity = 0.62
-    static let todoCardBackgroundOpacity = 0.56
-    static let completedTodoCardBackgroundOpacity = 0.62
-    static let primaryTextOpacity = 0.98
-    static let secondaryTextOpacity = 0.88
-    static let tertiaryTextOpacity = 0.78
-    static let subtleTextOpacity = 0.74
-    static let borderOpacity = 0.32
-    static let resetsResponseScrollOnContentChange = true
 }
 
 struct AIAssistantPanelView: View {
     @ObservedObject var model: AIAssistantModel
     var close: () -> Void
     var newConversation: (() -> Void)? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var hasVisibleResponse: Bool {
         AIVisibleResponse.hasVisibleContent(model.response)
@@ -57,19 +41,19 @@ struct AIAssistantPanelView: View {
                 .accessibilityLabel("隐藏聊天窗口")
                 .help("隐藏窗口，保留会话并继续后台处理")
             }
-            .foregroundStyle(.white.opacity(AIAssistantPanelStyle.secondaryTextOpacity))
+            .foregroundStyle(.secondary)
 
             HStack(spacing: 12) {
                 Image(systemName: "sparkles")
                     .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.94))
+                    .foregroundStyle(.secondary)
 
                 ZStack(alignment: .leading) {
                     if !model.progress.displayText.isEmpty {
                         Text(model.progress.displayText)
                             .font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(.white.opacity(AIAssistantPanelStyle.primaryTextOpacity))
-                            .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                            .foregroundStyle(.primary)
+                            .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98)))
                             .allowsHitTesting(false)
                     }
 
@@ -90,6 +74,7 @@ struct AIAssistantPanelView: View {
                         .font(.system(size: 18))
                 }
                 .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
                 .disabled(model.state == .loading || model.images.count >= AIImageAttachment.maxCount)
                 .help("添加图片，也可用 ⌘V 粘贴截图（最多 4 张）")
                 .accessibilityLabel("添加图片")
@@ -99,18 +84,15 @@ struct AIAssistantPanelView: View {
                         .font(.system(size: 23))
                 }
                 .buttonStyle(.plain)
+                .foregroundStyle(model.canSubmit ? Color.accentColor : .secondary.opacity(0.5))
                 .disabled(!model.canSubmit)
                 .help("发送文字和图片")
                 .accessibilityLabel("发送")
             }
             .padding(.horizontal, 13)
             .padding(.vertical, 9)
-            .background(.black.opacity(AIAssistantPanelStyle.inputBackgroundOpacity), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(.white.opacity(AIAssistantPanelStyle.borderOpacity), lineWidth: 1)
-            }
-            .animation(.easeInOut(duration: 0.18), value: model.progress)
+            .background(.fill.quinary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.progress)
 
             if !model.images.isEmpty {
                 HStack(spacing: 10) {
@@ -121,7 +103,7 @@ struct AIAssistantPanelView: View {
                                     .resizable()
                                     .scaledToFit()
                                     .frame(width: 88, height: 64)
-                                    .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                                    .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 8))
                                     .clipShape(RoundedRectangle(cornerRadius: 8))
                                     .help(attachment.name)
                                     .accessibilityLabel(attachment.name)
@@ -129,7 +111,7 @@ struct AIAssistantPanelView: View {
                             Button { model.removeImage(id: attachment.id) } label: {
                                 Image(systemName: "xmark.circle.fill")
                                     .symbolRenderingMode(.palette)
-                                    .foregroundStyle(.white, .black)
+                                    .foregroundStyle(.primary, .quaternary)
                             }
                             .buttonStyle(.plain)
                             .help("移除 \(attachment.name)")
@@ -147,7 +129,7 @@ struct AIAssistantPanelView: View {
             if let error = model.imageInputError {
                 Text(error)
                     .font(.caption)
-                    .foregroundStyle(.red.opacity(0.95))
+                    .foregroundStyle(.red)
             }
 
             if !model.proposals.isEmpty {
@@ -155,36 +137,39 @@ struct AIAssistantPanelView: View {
                     HStack {
                         Text("待确认操作")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(.white.opacity(AIAssistantPanelStyle.secondaryTextOpacity))
+                            .foregroundStyle(.secondary)
 
                         Spacer()
 
                         Button("全部忽略") {
                             model.dismissAllProposals()
                         }
-                        .buttonStyle(.plain)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white.opacity(AIAssistantPanelStyle.secondaryTextOpacity))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(.white.opacity(0.12), in: Capsule())
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
 
                         Button("全部执行") {
                             model.applyAllProposals()
                         }
                         .disabled(model.state == .loading)
                         .buttonStyle(.borderedProminent)
-                        .font(.caption.weight(.semibold))
+                        .controlSize(.small)
                     }
 
-                    ForEach(model.proposals) { proposal in
-                        AIProposalRow(proposal: proposal, model: model)
+                    // 多条待确认操作使用独立受限滚动区，底部操作始终可达。
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(model.proposals) { proposal in
+                                AIProposalRow(proposal: proposal, model: model)
+                            }
+                        }
                     }
+                    .frame(maxHeight: 220)
+                    .scrollIndicators(.automatic)
                 }
             }
 
             if hasVisibleResponse {
-                Divider().overlay(.white.opacity(0.2))
+                Divider()
                 AIAssistantResponseView(model: model)
                     .id(model.response)
             }
@@ -192,35 +177,33 @@ struct AIAssistantPanelView: View {
             if case let .failed(message) = model.state {
                 Text(message)
                     .font(.caption)
-                    .foregroundStyle(.red.opacity(0.95))
+                    .foregroundStyle(.red)
             }
         }
         .padding(16)
-        .frame(width: 720, alignment: .topLeading)
-        .animation(.smooth(duration: 0.28), value: hasVisibleResponse)
-        .animation(.smooth(duration: 0.24), value: model.state)
-        .background(.black.opacity(AIAssistantPanelStyle.panelBackgroundOpacity), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .frame(maxWidth: 720, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.28), value: hasVisibleResponse)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: model.state)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: AIAssistantPanelChrome.cornerRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(.white.opacity(AIAssistantPanelStyle.borderOpacity), lineWidth: 1)
+            RoundedRectangle(cornerRadius: AIAssistantPanelChrome.cornerRadius, style: .continuous)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.6), lineWidth: 1)
         }
-        .shadow(color: .black.opacity(0.38), radius: 34, y: 18)
-        .environment(\.colorScheme, .dark)
         .onAppear {
             focusInput()
         }
         .onExitCommand {
             close()
         }
-        .alert("清空全部全局记忆？", isPresented: Binding(
+        .alert("清空全部记忆？", isPresented: Binding(
             get: { model.memoryClearConfirmation != nil },
             set: { if !$0 { model.hideMemoryClearConfirmation() } }
         ), presenting: model.memoryClearConfirmation) { request in
             Button("取消", role: .cancel) { model.cancelMemoryClearConfirmation() }
-            Button("确认清空", role: .destructive) { model.confirmMemoryClear(request) }
+            Button("清空记忆", role: .destructive) { model.confirmMemoryClear(request) }
         } message: { request in
-            Text("将永久删除 \(request.entryCount) 条全局记忆，无法撤销。待办和当前聊天记录会保留。此操作始终需要确认。")
+            Text("将删除 \(request.entryCount) 条记忆，无法恢复。待办和聊天记录会保留。")
         }
     }
 
@@ -241,13 +224,9 @@ private struct AIAssistantResponseView: View {
                 .padding(1)
         }
         .frame(maxHeight: 170)
-        .scrollIndicators(.hidden)
+        .scrollIndicators(.automatic)
         .padding(12)
-        .background(.black.opacity(AIAssistantPanelStyle.responseBackgroundOpacity), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(.white.opacity(AIAssistantPanelStyle.borderOpacity), lineWidth: 1)
-        }
+        .background(.fill.quinary.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -268,7 +247,7 @@ private struct AIAssistantMessageContent: View {
                         Text(text)
                             .font(.system(size: 15, weight: .regular))
                             .lineSpacing(3)
-                            .foregroundStyle(.white.opacity(AIAssistantPanelStyle.primaryTextOpacity))
+                            .foregroundStyle(.primary)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -308,19 +287,19 @@ private struct AIProposalRow: View {
             VStack(alignment: .leading, spacing: 7) {
                 Text(proposalTitle)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white.opacity(AIAssistantPanelStyle.secondaryTextOpacity))
+                    .foregroundStyle(.secondary)
 
                 if let todoID = proposal.referencedTodoID {
                     AITodoReferenceCard(todo: model.referencedTodo(id: todoID))
                     if let reminderChange = proposal.reminderChangeSummary {
                         Text(reminderChange)
                             .font(.caption)
-                            .foregroundStyle(.white.opacity(AIAssistantPanelStyle.secondaryTextOpacity))
+                            .foregroundStyle(.secondary)
                     }
                 } else {
                     Text(proposal.summary)
                         .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.white.opacity(AIAssistantPanelStyle.primaryTextOpacity))
+                        .foregroundStyle(.primary)
                         .lineLimit(2)
                 }
             }
@@ -330,25 +309,18 @@ private struct AIProposalRow: View {
             Button("忽略") {
                 model.dismiss(proposal)
             }
-            .buttonStyle(.plain)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(.white.opacity(AIAssistantPanelStyle.secondaryTextOpacity))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.white.opacity(0.16), in: Capsule())
+            .buttonStyle(.bordered)
+            .controlSize(.small)
 
             Button(proposal.requiresMandatoryConfirmation ? "清空记忆…" : "执行") {
                 model.apply(proposal)
             }
             .disabled(model.state == .loading)
             .buttonStyle(.borderedProminent)
+            .controlSize(.small)
         }
         .padding(10)
-        .background(.black.opacity(AIAssistantPanelStyle.proposalBackgroundOpacity), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(.white.opacity(AIAssistantPanelStyle.borderOpacity), lineWidth: 1)
-        }
+        .background(.fill.quinary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var proposalTitle: String {
@@ -382,26 +354,27 @@ private struct AITodoReferenceCard: View {
         HStack(spacing: 10) {
             Image(systemName: todo.isCompleted ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(todo.isCompleted ? .green.opacity(0.94) : .white.opacity(AIAssistantPanelStyle.secondaryTextOpacity))
+                .foregroundStyle(todo.isCompleted ? .green : .secondary)
 
             Capsule()
-                .fill(todo.priority.islandColor.opacity(todo.exists ? 1 : 0.38))
+                .fill(todo.priority.color.opacity(todo.exists ? 1 : 0.38))
                 .frame(width: 4, height: 20)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Image(systemName: todo.priority.systemImage)
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(todo.priority.islandColor.opacity(todo.exists ? 1 : 0.72))
+                        .foregroundStyle(todo.priority.color.opacity(todo.exists ? 1 : 0.72))
 
                     Text(todo.exists ? "\(todo.priority.title)重要性" : "事项不存在")
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(todo.exists ? todo.priority.islandColor : .white.opacity(AIAssistantPanelStyle.subtleTextOpacity))
+                        .foregroundStyle(todo.exists ? AnyShapeStyle(todo.priority.color) : AnyShapeStyle(.secondary))
+                        .accessibilityLabel(todo.exists ? "\(todo.priority.title)重要性" : "事项不存在")
                 }
 
                 Text(todo.title)
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(todo.exists ? .white.opacity(AIAssistantPanelStyle.primaryTextOpacity) : .white.opacity(AIAssistantPanelStyle.secondaryTextOpacity))
+                    .foregroundStyle(todo.exists ? .primary : .secondary)
                     .lineLimit(1)
 
                 if todo.exists {
@@ -415,7 +388,7 @@ private struct AITodoReferenceCard: View {
                         }
                     }
                     .font(.caption2.weight(.medium))
-                    .foregroundStyle(.white.opacity(AIAssistantPanelStyle.tertiaryTextOpacity))
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                 }
             }
@@ -425,10 +398,10 @@ private struct AITodoReferenceCard: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.black.opacity(todo.isCompleted ? AIAssistantPanelStyle.completedTodoCardBackgroundOpacity : AIAssistantPanelStyle.todoCardBackgroundOpacity), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .background(.fill.quinary.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .stroke(todo.priority.islandColor.opacity(todo.exists ? 0.48 : 0.18), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(todo.priority.color.opacity(todo.exists ? 0.4 : 0.15), lineWidth: 1)
         }
     }
 }

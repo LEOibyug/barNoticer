@@ -33,10 +33,7 @@ final class IslandPointerTrackingTests: XCTestCase {
     }
 
     private func makeController() throws -> NotchIslandController {
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         return NotchIslandController(modelContainer: container)
     }
 

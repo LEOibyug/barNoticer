@@ -10,17 +10,11 @@ struct IslandSettingsView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                header
-                modeSection
-                hotZoneSection
-                islandSection
-                debugSection
-                resetButton
-            }
-            .padding(24)
-            .frame(maxWidth: 680, alignment: .leading)
+        SettingsPage(title: "岛设置", subtitle: "调整当前模式的鼠标唤起区域和展开面板位置。普通和宽体模式各自保存一套配置。") {
+            modeSection
+            hotZoneSection
+            islandSection
+            resetButton
         }
         .onAppear {
             draft = IslandLayoutDraft.load(mode: selectedMode)
@@ -34,18 +28,8 @@ struct IslandSettingsView: View {
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("岛设置")
-                .font(.system(size: 28, weight: .semibold))
-            Text("调整当前模式的鼠标唤起区域和展开面板位置。普通和宽体模式各自保存一套配置。")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-    }
-
     private var modeSection: some View {
-        SettingsSection(title: "显示模式", subtitle: "宽体模式会把岛扩展为三倍宽，并按重要性分三列展示。") {
+        SettingsSection(title: "显示模式", footer: "宽体模式会把岛扩展为三倍宽，按重要性或自定义分类分列展示。") {
             Picker("显示模式", selection: $modeRawValue) {
                 ForEach(IslandDisplayMode.allCases) { mode in
                     Label(mode.title, systemImage: mode.systemImage)
@@ -57,7 +41,7 @@ struct IslandSettingsView: View {
     }
 
     private var hotZoneSection: some View {
-        SettingsSection(title: "唤起区域", subtitle: "调整时会在屏幕顶部显示高亮边缘。") {
+        SettingsSection(title: "唤起区域", footer: "调整时会在屏幕顶部显示高亮边缘。") {
             SettingSlider("水平偏移", value: binding(\.hotZoneOffsetX), range: -360...360, previewKind: .hotZone, suffix: "px")
             SettingSlider("向下偏移", value: binding(\.hotZoneOffsetY), range: -24...180, previewKind: .hotZone, suffix: "px")
             SettingSlider("区域宽度", value: binding(\.hotZoneWidth), range: 120...520, previewKind: .hotZone, suffix: "px")
@@ -66,7 +50,7 @@ struct IslandSettingsView: View {
     }
 
     private var islandSection: some View {
-        SettingsSection(title: "展开区域", subtitle: "调整时会直接显示实际岛面板。") {
+        SettingsSection(title: "展开区域", footer: "调整时会直接显示实际岛面板。") {
             SettingSlider("水平偏移", value: binding(\.islandOffsetX), range: -640...640, previewKind: .island, suffix: "px")
             SettingSlider("向下偏移", value: binding(\.islandOffsetY), range: -24...220, previewKind: .island, suffix: "px")
             SettingSlider("顶部留白", value: binding(\.islandTopContentInset), range: 12...82, previewKind: .island, suffix: "px")
@@ -80,24 +64,6 @@ struct IslandSettingsView: View {
             Label("恢复默认", systemImage: "arrow.counterclockwise")
         }
         .buttonStyle(.bordered)
-    }
-
-    private var debugSection: some View {
-        SettingsSection(title: "调试日志", subtitle: "应用会写入轻量调试日志，并自动清理过大的旧日志。") {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(AppDebugLogStore.shared.logFileURL.path)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-
-                Button {
-                    openLogDirectory()
-                } label: {
-                    Label("打开日志位置", systemImage: "folder")
-                }
-                .buttonStyle(.bordered)
-            }
-        }
     }
 
     private func reset() {
@@ -114,35 +80,6 @@ struct IslandSettingsView: View {
                 draft.save(mode: selectedMode)
             }
         )
-    }
-
-    private func openLogDirectory() {
-        try? FileManager.default.createDirectory(at: AppDebugLogStore.shared.directory, withIntermediateDirectories: true)
-        NSWorkspace.shared.activateFileViewerSelecting([AppDebugLogStore.shared.logFileURL])
-    }
-}
-
-struct SettingsSection<Content: View>: View {
-    let title: String
-    let subtitle: String
-    @ViewBuilder var content: () -> Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            VStack(spacing: 12) {
-                content()
-            }
-        }
-        .padding(16)
-        .background(.quaternary.opacity(0.42), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
@@ -187,6 +124,7 @@ private struct SettingSlider: View {
                 .font(.system(.body, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .frame(width: 64, alignment: .trailing)
+                .monospacedDigit()
         }
         .onChange(of: value) { _, _ in
             if isEditing {

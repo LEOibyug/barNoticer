@@ -126,10 +126,7 @@ final class ReminderEngineTests: XCTestCase {
 
     @MainActor
     func testReminderEngineWritesPromptAndReplyToDebugLog() async throws {
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         let suiteName = "ReminderLogTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -170,10 +167,7 @@ final class ReminderEngineTests: XCTestCase {
 
     @MainActor
     func testReminderEngineFallsBackForDeadlineWhenAIUnavailable() async throws {
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         let suiteName = "ReminderFallbackTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }

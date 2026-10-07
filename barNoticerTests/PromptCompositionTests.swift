@@ -7,10 +7,7 @@ import XCTest
 @MainActor
 final class PromptCompositionTests: XCTestCase {
     func testAssistantUsesNativePlaceholderWhileCompositionBindingIsStale() async throws {
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         let model = AIAssistantModel(modelContext: container.mainContext)
         let host = NSHostingView(rootView: AIAssistantPanelView(model: model, close: {}))
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 720, height: 128), styleMask: .borderless, backing: .buffered, defer: false)

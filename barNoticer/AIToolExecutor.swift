@@ -221,15 +221,16 @@ final class AIToolExecutor {
     }
 
     private func fetchTodo(id: UUID) throws -> TodoItem {
-        let items = try fetchTodos()
-        guard let item = items.first(where: { $0.id == id }) else {
+        guard let item = try AITodoLookup.todo(id: id, in: modelContext) else {
             throw AIToolExecutorError.todoNotFound(id)
         }
         return item
     }
 
     private func fetchGroup(id: UUID) throws -> TodoGroup {
-        guard let group = try fetchGroups().first(where: { $0.id == id }) else {
+        var descriptor = FetchDescriptor<TodoGroup>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        guard let group = try modelContext.fetch(descriptor).first else {
             throw AIToolExecutorError.invalidArguments
         }
         return group

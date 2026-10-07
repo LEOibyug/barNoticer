@@ -242,8 +242,7 @@ final class AIImageInputTests: XCTestCase {
         keyStore.saveAPIKey("test-key")
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [protocolClass]
-        let container = try ModelContainer(for: TodoItem.self, TodoGroup.self, DailySummary.self,
-                                           configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let container = try TestSupport.makeInMemoryContainer()
         let model = AIAssistantModel(modelContext: container.mainContext,
                                      client: AIClient(session: URLSession(configuration: configuration)),
                                      apiKeyStore: keyStore, defaults: defaults)

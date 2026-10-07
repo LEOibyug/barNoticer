@@ -7,6 +7,8 @@ import SwiftUI
 final class TodoCreationPanelController {
     private let modelContext: ModelContext
     private var panel: NSPanel?
+    private var presentationGeneration = 0
+    private var contentHeight: CGFloat = TodoCreationPanelChrome.baseHeight
 
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
@@ -23,31 +25,34 @@ final class TodoCreationPanelController {
     func show() {
         let panel = panel ?? makePanel()
         self.panel = panel
-        center(panel)
+        presentationGeneration += 1
+        applyFrame(animated: false)
         panel.alphaValue = 0
         panel.makeKeyAndOrderFront(nil)
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.16
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        NSAnimationContext.runAnimation(duration: 0.16, timing: CAMediaTimingFunction(name: .easeOut)) {
             panel.animator().alphaValue = 1
         }
     }
 
     func close() {
         guard let panel else { return }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.12
-            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+        presentationGeneration += 1
+        let generation = presentationGeneration
+        // 关闭动画期间重新打开时，旧 completion 不得再隐藏新窗口。
+        NSAnimationContext.runAnimation(duration: 0.12, timing: CAMediaTimingFunction(name: .easeIn)) {
             panel.animator().alphaValue = 0
-        } completionHandler: { [weak panel] in
-            panel?.orderOut(nil)
+        } completion: { [weak self, weak panel] in
+            Task { @MainActor [weak self, weak panel] in
+                guard self?.presentationGeneration == generation, let panel else { return }
+                panel.orderOut(nil)
+            }
         }
     }
 
     private func makePanel() -> NSPanel {
         let panel = FocusableTodoCreationPanel(
-            contentRect: CGRect(origin: .zero, size: TodoCreationPanelChrome.size),
+            contentRect: CGRect(origin: .zero, size: TodoCreationPanelChrome.baseSize),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -63,12 +68,15 @@ final class TodoCreationPanelController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.backgroundColor = .clear
         panel.isOpaque = false
-        panel.appearance = NSAppearance(named: .aqua)
-        panel.hasShadow = false
+        // 系统窗口阴影作为唯一阴影来源，内容层不再叠加 SwiftUI 阴影。
+        panel.hasShadow = true
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
 
-        let hostingView = NSHostingView(rootView: TodoCreationPanelView(modelContext: modelContext) { [weak self] in
+        let hostingView = NSHostingView(rootView: TodoCreationPanelView(modelContext: modelContext, onContentHeightChange: { [weak self, weak panel] height in
+            guard let self, let panel else { return }
+            self.setContentHeight(height, on: panel, animated: true)
+        }) { [weak self] in
             self?.close()
         })
         hostingView.wantsLayer = true
@@ -76,23 +84,53 @@ final class TodoCreationPanelController {
         hostingView.layer?.cornerRadius = TodoCreationPanelChrome.cornerRadius
         hostingView.layer?.cornerCurve = .continuous
         hostingView.layer?.backgroundColor = NSColor.clear.cgColor
-        hostingView.appearance = NSAppearance(named: .aqua)
         panel.contentView = hostingView
         return panel
     }
 
-    private func center(_ panel: NSPanel) {
-        let screenFrame = NSScreen.main?.visibleFrame ?? .zero
-        let size = panel.frame.size
-        panel.setFrameOrigin(CGPoint(
-            x: screenFrame.midX - size.width / 2,
-            y: screenFrame.minY + screenFrame.height * 0.22
-        ))
+    private func applyFrame(animated: Bool) {
+        guard let panel else { return }
+        setContentHeight(contentHeight, on: panel, animated: animated, reposition: true)
+    }
+
+    /// 内容高度变化时按同一锚点（底边）向上扩展；四边限制在屏幕可用区域内。
+    private func setContentHeight(_ height: CGFloat, on panel: NSPanel, animated: Bool, reposition: Bool = false) {
+        let screenFrame = (panel.screen ?? NSScreen.main)?.visibleFrame
+            ?? CGRect(x: 0, y: 0, width: 1_280, height: 800)
+        let margin: CGFloat = 12
+        let clampedHeight = min(max(height, 160), screenFrame.height - margin * 2)
+        let width = min(TodoCreationPanelChrome.baseSize.width, screenFrame.width - margin * 2)
+
+        // 首次定位：水平居中，底边位于可见高度 22% 处；之后高度变化保持底边锚点。
+        let current = panel.frame
+        let bottom: CGFloat
+        if reposition || current.width == 0 {
+            bottom = screenFrame.minY + screenFrame.height * 0.22
+        } else {
+            bottom = current.minY
+        }
+
+        let frame = CGRect(
+            x: min(max(screenFrame.midX - width / 2, screenFrame.minX + margin), screenFrame.maxX - margin - width),
+            y: min(max(bottom, screenFrame.minY + margin), screenFrame.maxY - margin - clampedHeight),
+            width: width,
+            height: clampedHeight
+        )
+
+        contentHeight = clampedHeight
+        if animated, panel.isVisible {
+            NSAnimationContext.runAnimation(duration: 0.2, timing: CAMediaTimingFunction(name: .easeInEaseOut)) {
+                panel.animator().setFrame(frame, display: true)
+            }
+        } else {
+            panel.setFrame(frame, display: true)
+        }
     }
 }
 
 enum TodoCreationPanelChrome {
-    static let size = CGSize(width: 640, height: 300)
+    static let baseSize = CGSize(width: 640, height: 300)
+    static let baseHeight: CGFloat = 300
     static let cornerRadius: CGFloat = 18
 }
 
@@ -129,6 +167,7 @@ private final class FocusableTodoCreationPanel: NSPanel {
 
 private struct TodoCreationPanelView: View {
     let modelContext: ModelContext
+    let onContentHeightChange: (CGFloat) -> Void
     let close: () -> Void
 
     @Query private var storedGroups: [TodoGroup]
@@ -136,14 +175,8 @@ private struct TodoCreationPanelView: View {
     @State private var note = ""
     @State private var priority: TodoPriority = .medium
     @State private var groupID = TodoGroup.defaultGroupID
-    @State private var scheduleKind = TodoScheduleKind.none
-    @State private var deadline = Date().addingTimeInterval(3_600)
-    @State private var reminderMinutesBefore: Int?
-    @State private var firstScheduledTime = Date().addingTimeInterval(3_600)
-    @State private var secondScheduledTime = Date().addingTimeInterval(7_200)
-    @State private var recurrenceRule = TodoRecurrenceRule.daily
-    @State private var customRecurrenceDays = 2
-    @State private var recurrenceAnchor = Date().addingTimeInterval(3_600)
+    @State private var scheduleDraft = TodoScheduleDraft()
+    @State private var saveErrorText: String?
     @FocusState private var isTitleFocused: Bool
 
     private var groups: [TodoGroup] {
@@ -155,30 +188,49 @@ private struct TodoCreationPanelView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
-            primaryRow
-            controls
-            scheduleRow
-            if scheduleKind == .singleDeadline {
-                TodoReminderEditor(minutesBefore: $reminderMinutesBefore)
-                    .frame(height: 30, alignment: .leading)
-            }
-            noteField
+        ScrollView {
+            content
+                .padding(18)
+                .frame(maxWidth: TodoCreationPanelChrome.baseSize.width, alignment: .topLeading)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .onGeometryChange(for: CGFloat.self) { proxy in
+                    proxy.size.height
+                } action: { _, height in
+                    onContentHeightChange(height)
+                }
         }
-        .padding(18)
-        .frame(width: TodoCreationPanelChrome.size.width, height: TodoCreationPanelChrome.size.height, alignment: .topLeading)
-        .background(.white.opacity(0.86), in: RoundedRectangle(cornerRadius: TodoCreationPanelChrome.cornerRadius, style: .continuous))
+        .scrollIndicators(.never)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: TodoCreationPanelChrome.cornerRadius, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: TodoCreationPanelChrome.cornerRadius, style: .continuous)
-                .stroke(.black.opacity(0.10), lineWidth: 1)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.6), lineWidth: 1)
         }
-        .shadow(color: .black.opacity(0.20), radius: 24, y: 12)
         .onAppear {
             groupID = groups.first?.id ?? TodoGroup.defaultGroupID
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 isTitleFocused = true
+            }
+        }
+    }
+
+    /// 任务内容 → 可选安排 → 提交；标题独占主要横向空间。
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            header
+            titleField
+            metadataRow
+            controls
+            TodoScheduleEditor(draft: $scheduleDraft, layout: .compact)
+            if scheduleDraft.kind == .singleDeadline {
+                TodoReminderEditor(minutesBefore: $scheduleDraft.reminderMinutesBefore)
+                    .frame(height: 30, alignment: .leading)
+            }
+            noteField
+            if let saveErrorText {
+                Label(saveErrorText, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -204,10 +256,24 @@ private struct TodoCreationPanelView: View {
         }
     }
 
-    private var primaryRow: some View {
-        HStack(spacing: 10) {
-            titleField
+    private var titleField: some View {
+        TextField("输入待办标题", text: $title)
+            .font(.system(size: 16, weight: .semibold))
+            .textFieldStyle(.plain)
+            .foregroundStyle(.primary)
+            .focused($isTitleFocused)
+            .onSubmit(submit)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(.quinary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(isTitleFocused ? Color.accentColor.opacity(0.55) : Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 1)
+            }
+    }
 
+    private var metadataRow: some View {
+        HStack(spacing: 10) {
             Picker("重要性", selection: $priority) {
                 ForEach(TodoPriority.allCases) { priority in
                     Label(priority.title, systemImage: priority.systemImage)
@@ -222,24 +288,10 @@ private struct TodoCreationPanelView: View {
                     Text(group.name).tag(group.id)
                 }
             }
-            .frame(width: 120)
-        }
-    }
+            .frame(width: 140)
 
-    private var titleField: some View {
-        TextField("输入待办标题", text: $title)
-            .font(.system(size: 16, weight: .semibold))
-            .textFieldStyle(.plain)
-            .foregroundStyle(.primary)
-            .focused($isTitleFocused)
-            .onSubmit(submit)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(.white.opacity(0.78), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(isTitleFocused ? Color.accentColor.opacity(0.55) : .black.opacity(0.10), lineWidth: 1)
-            }
+            Spacer(minLength: 0)
+        }
     }
 
     private var noteField: some View {
@@ -249,10 +301,10 @@ private struct TodoCreationPanelView: View {
             .scrollContentBackground(.hidden)
             .frame(height: 52)
             .padding(7)
-            .background(.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(.quinary.opacity(0.7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(.black.opacity(0.08), lineWidth: 1)
+                    .stroke(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 1)
             }
             .overlay(alignment: .topLeading) {
                 if note.isEmpty {
@@ -268,13 +320,14 @@ private struct TodoCreationPanelView: View {
 
     private var controls: some View {
         HStack(spacing: 10) {
-            Picker("时间计划", selection: $scheduleKind) {
+            // 不固定宽度，完整显示“无时间 / 多个时间点”等日程类型名称。
+            Picker("时间计划", selection: $scheduleDraft.kind) {
                 ForEach(TodoScheduleKind.allCases) { kind in
                     Text(kind.title).tag(kind)
                 }
             }
             .pickerStyle(.menu)
-            .frame(width: 132)
+            .fixedSize()
 
             Spacer()
 
@@ -289,99 +342,46 @@ private struct TodoCreationPanelView: View {
         }
     }
 
-    @ViewBuilder
-    private var scheduleRow: some View {
-        HStack(spacing: 10) {
-            switch scheduleKind {
-            case .none:
-                Label("不设置时间计划", systemImage: "calendar.badge.minus")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            case .singleDeadline:
-                compactDatePicker("DDL", selection: $deadline)
-            case .multipleTimes:
-                compactDatePicker("时间 1", selection: $firstScheduledTime)
-                compactDatePicker("时间 2", selection: $secondScheduledTime)
-            case .recurring:
-                Picker("周期", selection: $recurrenceRule) {
-                    ForEach(recurrencePickerRules) { rule in
-                        Text(rule.title).tag(rule)
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(width: 112)
-
-                if case .everyNDays = recurrenceRule {
-                    Stepper(
-                        value: Binding(
-                            get: { customRecurrenceDays },
-                            set: { days in
-                                customRecurrenceDays = max(1, days)
-                                recurrenceRule = .everyNDays(customRecurrenceDays)
-                            }
-                        ),
-                        in: 1...365
-                    ) {
-                        Text("\(customRecurrenceDays)天")
-                            .font(.caption)
-                            .frame(width: 42, alignment: .leading)
-                    }
-                    .frame(width: 98)
-                }
-
-                compactDatePicker("开始", selection: $recurrenceAnchor)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .frame(height: 30, alignment: .leading)
-        .animation(.easeInOut(duration: 0.16), value: scheduleKind)
-    }
-
-    private var recurrencePickerRules: [TodoRecurrenceRule] {
-        [.daily, .weekly, .monthly, .everyNDays(customRecurrenceDays)]
-    }
-
-    private func compactDatePicker(_ title: String, selection: Binding<Date>) -> some View {
-        HStack(spacing: 5) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            DatePicker("", selection: selection, displayedComponents: [.date, .hourAndMinute])
-                .labelsHidden()
-        }
-    }
-
     private func submit() {
         guard !trimmedTitle.isEmpty else { return }
 
-        let schedule = selectedSchedule()
+        var deadlineAt: Date?
+        var scheduledTimes: [Date] = []
+        var recurrenceRule: TodoRecurrenceRule?
+        var recurrenceAnchor: Date?
+        switch scheduleDraft.effectivePayload {
+        case .none:
+            break
+        case let .single(deadline):
+            deadlineAt = deadline
+        case let .multiple(times):
+            scheduledTimes = times
+        case let .recurring(rule, anchor):
+            recurrenceRule = rule
+            recurrenceAnchor = anchor
+        }
+
         let item = TodoItem(
             title: trimmedTitle,
             note: note,
             priority: priority,
             groupID: groupID,
-            deadlineAt: schedule.deadlineAt,
-            scheduledTimes: schedule.scheduledTimes,
-            recurrenceRule: schedule.recurrenceRule,
-            recurrenceAnchor: schedule.recurrenceAnchor,
-            reminderMinutesBefore: scheduleKind == .singleDeadline ? reminderMinutesBefore : nil
+            deadlineAt: deadlineAt,
+            scheduledTimes: scheduledTimes,
+            recurrenceRule: recurrenceRule,
+            recurrenceAnchor: recurrenceAnchor,
+            reminderMinutesBefore: scheduleDraft.effectiveReminderMinutesBefore
         )
         modelContext.insert(item)
-        try? modelContext.save()
-        close()
-    }
-
-    private func selectedSchedule() -> (deadlineAt: Date?, scheduledTimes: [Date], recurrenceRule: TodoRecurrenceRule?, recurrenceAnchor: Date?) {
-        switch scheduleKind {
-        case .none:
-            return (nil, [], nil, nil)
-        case .singleDeadline:
-            return (deadline, [], nil, nil)
-        case .multipleTimes:
-            return (nil, [firstScheduledTime, secondScheduledTime], nil, nil)
-        case .recurring:
-            return (nil, [], recurrenceRule, recurrenceAnchor)
+        do {
+            try modelContext.save()
+            saveErrorText = nil
+            close()
+        } catch {
+            // 撤回本次插入：输入保留在面板里，重试只插入一个草稿对象。
+            modelContext.delete(item)
+            try? AppDebugLogStore.shared.write(.error, category: "TodoCreation", message: "保存新事项失败", metadata: ["error": error.localizedDescription])
+            saveErrorText = "未能保存。内容已保留，请重试。"
         }
     }
 }

@@ -267,10 +267,7 @@ final class AIConversationTests: XCTestCase {
         sessionConfiguration.protocolClasses = [AIConversationLogURLProtocol.self]
         AIConversationLogURLProtocol.responseBody = #"{"choices":[{"message":{"content":"建议先完成高优先级事项。"}}]}"#
 
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         let model = AIAssistantModel(
             modelContext: container.mainContext,
             client: AIClient(session: URLSession(configuration: sessionConfiguration)),
@@ -307,10 +304,7 @@ final class AIConversationTests: XCTestCase {
         let keyStore = AIAPIKeyStore(defaults: defaults)
         keyStore.saveAPIKey("test-api-key")
 
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.protocolClasses = [AIConversationLogURLProtocol.self]
         let model = AIAssistantModel(
@@ -357,10 +351,7 @@ final class AIConversationTests: XCTestCase {
         let keyStore = AIAPIKeyStore(defaults: defaults)
         keyStore.saveAPIKey("test-api-key")
 
-        let container = try ModelContainer(
-            for: TodoItem.self, TodoGroup.self, DailySummary.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+        let container = try TestSupport.makeInMemoryContainer()
         AIConversationSequenceURLProtocol.responseBodies = [
             #"{"choices":[{"message":{"content":"","tool_calls":[{"id":"call-1","type":"function","function":{"name":"create_todo","arguments":"{\"title\":\"第一项\",\"priority\":\"high\"}"}}]}}]}"#,
             #"{"choices":[{"message":{"content":"","tool_calls":[{"id":"call-2","type":"function","function":{"name":"create_todo","arguments":"{\"title\":\"第二项\",\"priority\":\"medium\"}"}}]}}]}"#,

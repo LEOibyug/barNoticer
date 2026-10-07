@@ -3,23 +3,17 @@ import SwiftUI
 
 struct TodoRow: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var item: TodoItem
     let groups: [TodoGroup]
 
     @State private var editedTitle = ""
-    @State private var hasDeadline = false
-    @State private var editedDeadline = Date().addingTimeInterval(3_600)
-    @State private var editedReminderMinutesBefore: Int?
-    @State private var scheduleWasEdited = false
-    @State private var editedScheduleKind = TodoScheduleKind.none
-    @State private var firstScheduledTime = Date().addingTimeInterval(3_600)
-    @State private var secondScheduledTime = Date().addingTimeInterval(7_200)
-    @State private var recurrenceRule = TodoRecurrenceRule.daily
-    @State private var customRecurrenceDays = 2
-    @State private var recurrenceAnchor = Date().addingTimeInterval(3_600)
     @State private var editedNote = ""
+    @State private var scheduleDraft = TodoScheduleDraft()
     @State private var isShowingSettings = false
     @State private var isNoteExpanded = false
+    @State private var sheetErrorText: String?
+    @State private var conflictFields: [String]?
     @FocusState private var isTitleFocused: Bool
 
     var body: some View {
@@ -44,7 +38,7 @@ struct TodoRow: View {
         }
         .padding(.vertical, 8)
         .onAppear {
-            syncDeadlineState()
+            syncScheduleState()
             syncTitleState()
             syncNoteState()
         }
@@ -52,7 +46,7 @@ struct TodoRow: View {
         .onChange(of: item.id) { _, _ in
             syncTitleState()
             syncNoteState()
-            syncDeadlineState()
+            syncScheduleState()
             isNoteExpanded = false
         }
         .onChange(of: item.title) { _, newTitle in
@@ -60,7 +54,7 @@ struct TodoRow: View {
             editedTitle = newTitle
         }
         .onChange(of: item.updatedAt) { _, _ in
-            if !isShowingSettings { syncDeadlineState() }
+            if !isShowingSettings { syncScheduleState() }
             if noteText == nil {
                 isNoteExpanded = false
             }
@@ -68,7 +62,7 @@ struct TodoRow: View {
         .sheet(isPresented: Binding(
             get: { isShowingSettings },
             set: { isPresented in
-                if !isPresented { commitScheduleSettings() }
+                if !isPresented { commitOnDismiss() }
                 isShowingSettings = isPresented
             }
         )) {
@@ -83,6 +77,7 @@ struct TodoRow: View {
             } else {
                 item.updateCompletion(!item.isCompleted)
             }
+            try? modelContext.save()
         } label: {
             Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 18))
@@ -108,9 +103,11 @@ struct TodoRow: View {
 
     private var settingsButton: some View {
         Button {
-            syncDeadlineState()
+            syncScheduleState()
             syncTitleState()
             syncNoteState()
+            sheetErrorText = nil
+            conflictFields = nil
             isShowingSettings = true
         } label: {
             Image(systemName: "gearshape")
@@ -136,7 +133,6 @@ struct TodoRow: View {
                 Spacer()
 
                 Button {
-                    commitScheduleSettings()
                     isShowingSettings = false
                 } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -184,7 +180,10 @@ struct TodoRow: View {
 
                     Picker("分组", selection: Binding(
                         get: { item.groupID ?? TodoGroup.defaultGroupID },
-                        set: { item.updateGroup($0) }
+                        set: {
+                            item.updateGroup($0)
+                            try? modelContext.save()
+                        }
                     )) {
                         ForEach(groups) { group in
                             Text(group.name).tag(group.id)
@@ -194,7 +193,10 @@ struct TodoRow: View {
 
                     Picker("优先级", selection: Binding(
                         get: { item.priority },
-                        set: { item.priority = $0 }
+                        set: {
+                            item.priority = $0
+                            try? modelContext.save()
+                        }
                     )) {
                         ForEach(TodoPriority.allCases) { priority in
                             Label(priority.title, systemImage: priority.systemImage)
@@ -205,23 +207,26 @@ struct TodoRow: View {
                 }
 
                 Section("时间计划") {
-                    scheduleEditor
-                    if editedScheduleKind == .singleDeadline {
-                        TodoReminderEditor(minutesBefore: $editedReminderMinutesBefore)
-                        if let minutes = editedReminderMinutesBefore {
-                            Text("提醒时间：\(editedDeadline.addingTimeInterval(-Double(minutes) * 60).formatted(date: .abbreviated, time: .shortened))")
+                    TodoScheduleEditor(draft: $scheduleDraft, layout: .form)
+                    if scheduleDraft.kind == .singleDeadline {
+                        TodoReminderEditor(minutesBefore: $scheduleDraft.reminderMinutesBefore)
+                        if let minutes = scheduleDraft.reminderMinutesBefore {
+                            Text("提醒时间：\(scheduleDraft.deadline.addingTimeInterval(-Double(minutes) * 60).formatted(date: .abbreviated, time: .shortened))")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                    }
+                    if let sheetErrorText {
+                        Label(sheetErrorText, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.red)
                     }
                 }
 
                 Section {
                     HStack {
                         Button(role: .destructive) {
-                            editedReminderMinutesBefore = nil
-                            modelContext.delete(item)
-                            isShowingSettings = false
+                            deleteItem()
                         } label: {
                             Label("删除事项", systemImage: "trash")
                         }
@@ -229,10 +234,7 @@ struct TodoRow: View {
                         Spacer()
 
                         Button("完成") {
-                            commitTitle()
-                            commitNote()
-                            commitScheduleSettings()
-                            isShowingSettings = false
+                            finishEditing()
                         }
                         .keyboardShortcut(.defaultAction)
                     }
@@ -246,137 +248,28 @@ struct TodoRow: View {
         .frame(width: 430)
         .presentationSizing(.fitted)
         .onAppear {
-            syncDeadlineState()
+            syncScheduleState()
             syncTitleState()
             syncNoteState()
         }
-    }
-
-    private var scheduleEditor: some View {
-        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
-            GridRow {
-                Text("类型")
-                    .foregroundStyle(.secondary)
-                scheduleKindPicker
+        .alert(
+            "这项任务已更新。",
+            isPresented: Binding(
+                get: { conflictFields != nil },
+                set: { if !$0 { conflictFields = nil } }
+            )
+        ) {
+            Button("重新载入") {
+                scheduleDraft = TodoScheduleDraft(item: item)
+                sheetErrorText = nil
             }
-
-            switch editedScheduleKind {
-            case .none:
-                EmptyView()
-            case .singleDeadline:
-                GridRow {
-                    Text("DDL")
-                        .foregroundStyle(.secondary)
-                    DatePicker("", selection: Binding(
-                        get: { editedDeadline },
-                        set: { date in
-                            editedDeadline = date
-                            scheduleWasEdited = true
-                        }
-                    ), displayedComponents: [.date, .hourAndMinute])
-                    .labelsHidden()
-                }
-            case .multipleTimes:
-                GridRow {
-                    Text("时间 1")
-                        .foregroundStyle(.secondary)
-                    DatePicker("", selection: Binding(
-                        get: { firstScheduledTime },
-                        set: { date in
-                            firstScheduledTime = date
-                            scheduleWasEdited = true
-                        }
-                    ), displayedComponents: [.date, .hourAndMinute])
-                    .labelsHidden()
-                }
-
-                GridRow {
-                    Text("时间 2")
-                        .foregroundStyle(.secondary)
-                    DatePicker("", selection: Binding(
-                        get: { secondScheduledTime },
-                        set: { date in
-                            secondScheduledTime = date
-                            scheduleWasEdited = true
-                        }
-                    ), displayedComponents: [.date, .hourAndMinute])
-                    .labelsHidden()
-                }
-            case .recurring:
-                GridRow {
-                    Text("周期")
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 10) {
-                        recurrencePicker
-                        if case .everyNDays = recurrenceRule {
-                            Stepper(
-                                value: Binding(
-                                    get: { customRecurrenceDays },
-                                    set: { days in
-                                        customRecurrenceDays = max(1, days)
-                                        recurrenceRule = .everyNDays(customRecurrenceDays)
-                                        scheduleWasEdited = true
-                                    }
-                                ),
-                                in: 1...365
-                            ) {
-                                Text("\(customRecurrenceDays)天")
-                                    .frame(width: 44, alignment: .leading)
-                            }
-                        }
-                    }
-                }
-
-                GridRow {
-                    Text("开始")
-                        .foregroundStyle(.secondary)
-                    DatePicker("", selection: Binding(
-                        get: { recurrenceAnchor },
-                        set: { date in
-                            recurrenceAnchor = date
-                            scheduleWasEdited = true
-                        }
-                    ), displayedComponents: [.date, .hourAndMinute])
-                    .labelsHidden()
-                }
+            Button("覆盖保存") {
+                finishEditing(force: true)
             }
+            Button("取消", role: .cancel) { conflictFields = nil }
+        } message: {
+            Text("以下内容同时被修改：\(conflictFields?.joined(separator: "、") ?? "")。可以保留你的修改并覆盖，或重新载入最新内容。")
         }
-    }
-
-    private var scheduleKindPicker: some View {
-        Picker("时间", selection: Binding(
-            get: { editedScheduleKind },
-            set: { kind in
-                editedScheduleKind = kind
-                scheduleWasEdited = true
-            }
-        )) {
-            Text("无时间").tag(TodoScheduleKind.none)
-            Text("单次 DDL").tag(TodoScheduleKind.singleDeadline)
-            Text("多个时间点").tag(TodoScheduleKind.multipleTimes)
-            Text("重复事项").tag(TodoScheduleKind.recurring)
-        }
-        .pickerStyle(.menu)
-        .frame(width: 150, alignment: .leading)
-    }
-
-    private var recurrencePicker: some View {
-        Picker("重复", selection: Binding(
-            get: { recurrenceRule },
-            set: { rule in
-                recurrenceRule = rule
-                scheduleWasEdited = true
-                if let days = rule.intervalDays {
-                    customRecurrenceDays = days
-                }
-            }
-        )) {
-            ForEach(recurrencePickerRules) { rule in
-                Text(rule.title).tag(rule)
-            }
-        }
-        .pickerStyle(.menu)
-        .frame(width: 118, alignment: .leading)
     }
 
     private func expandedNotePanel(_ note: String) -> some View {
@@ -408,8 +301,12 @@ struct TodoRow: View {
             Text(TodoGroupResolver.group(for: item, groups: groups).name)
             if noteText != nil {
                 Button {
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                    if reduceMotion {
                         isNoteExpanded.toggle()
+                    } else {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                            isNoteExpanded.toggle()
+                        }
                     }
                 } label: {
                     Label(isNoteExpanded ? "收起备注" : "查看备注", systemImage: isNoteExpanded ? "chevron.up" : "note.text")
@@ -427,10 +324,6 @@ struct TodoRow: View {
         .font(.caption)
         .foregroundStyle(.secondary)
         .lineLimit(1)
-    }
-
-    private var recurrencePickerRules: [TodoRecurrenceRule] {
-        [.daily, .weekly, .monthly, .everyNDays(customRecurrenceDays)]
     }
 
     private var noteText: String? {
@@ -453,29 +346,12 @@ struct TodoRow: View {
     }
 
     private func commitNote() {
+        guard editedNote != (item.note ?? "") else { return }
         item.updateNote(editedNote)
-        syncNoteState()
     }
 
-    private func syncDeadlineState() {
-        scheduleWasEdited = false
-        editedReminderMinutesBefore = item.reminderMinutesBefore
-        editedScheduleKind = item.scheduleKind
-        hasDeadline = item.hasSchedule
-        if let deadlineAt = item.deadlineAt ?? item.nextOccurrence() {
-            editedDeadline = deadlineAt
-        }
-        if let first = item.scheduledTimes.first {
-            firstScheduledTime = first
-        }
-        if item.scheduledTimes.count > 1 {
-            secondScheduledTime = item.scheduledTimes[1]
-        } else if let first = item.scheduledTimes.first {
-            secondScheduledTime = first.addingTimeInterval(3_600)
-        }
-        recurrenceRule = item.recurrenceRule ?? .daily
-        customRecurrenceDays = item.recurrenceRule?.intervalDays ?? customRecurrenceDays
-        recurrenceAnchor = item.recurrenceAnchor ?? item.nextOccurrence() ?? Date().addingTimeInterval(3_600)
+    private func syncScheduleState() {
+        scheduleDraft = TodoScheduleDraft(item: item)
     }
 
     private func syncTitleState() {
@@ -486,25 +362,45 @@ struct TodoRow: View {
         editedNote = item.note ?? ""
     }
 
-    private func commitScheduleSettings() {
-        guard item.modelContext != nil, !item.isDeleted else { return }
-        if scheduleWasEdited { applyScheduleEditor() }
-        let minutes = editedScheduleKind == .singleDeadline ? editedReminderMinutesBefore : nil
-        if item.reminderMinutesBefore != minutes { item.updateReminder(minutesBefore: minutes) }
-        try? modelContext.save()
-        scheduleWasEdited = false
+    /// 显式“完成”：提交失败或冲突时保持窗口打开，给出反馈。
+    private func finishEditing(force: Bool = false) {
+        commitTitle()
+        commitNote()
+        switch TodoScheduleCommitter.commit(&scheduleDraft, into: item, context: modelContext, force: force) {
+        case .saved:
+            sheetErrorText = nil
+            conflictFields = nil
+            isShowingSettings = false
+        case let .conflict(fields):
+            conflictFields = fields
+        case .itemDeleted:
+            sheetErrorText = "事项已被删除，修改无法保存。"
+            conflictFields = nil
+        case let .saveFailed(reason):
+            try? AppDebugLogStore.shared.write(.error, category: "TodoEdit", message: "事项设置保存失败", metadata: ["error": reason, "itemID": item.id.uuidString])
+            sheetErrorText = "未能保存。内容已保留，请重试。"
+            conflictFields = nil
+        }
     }
 
-    private func applyScheduleEditor() {
-        switch editedScheduleKind {
-        case .none:
-            item.clearSchedule()
-        case .singleDeadline:
-            item.updateSchedule(deadlineAt: editedDeadline)
-        case .multipleTimes:
-            item.updateSchedule(scheduledTimes: [firstScheduledTime, secondScheduledTime])
-        case .recurring:
-            item.updateSchedule(recurrenceRule: recurrenceRule, recurrenceAnchor: recurrenceAnchor)
+    /// 关闭设置时的自动提交保持既有语义；失败不阻断关闭，但不假装完成。
+    private func commitOnDismiss() {
+        guard !item.isDeleted, item.modelContext != nil else { return }
+        commitTitle()
+        commitNote()
+        if scheduleDraft.hasChanges {
+            let outcome = TodoScheduleCommitter.commit(&scheduleDraft, into: item, context: modelContext)
+            if case .saveFailed = outcome {
+                // 草稿未清基线，下次打开仍能看到未保存的编辑值。
+            }
+        } else {
+            try? modelContext.save()
         }
+    }
+
+    private func deleteItem() {
+        modelContext.delete(item)
+        try? modelContext.save()
+        isShowingSettings = false
     }
 }

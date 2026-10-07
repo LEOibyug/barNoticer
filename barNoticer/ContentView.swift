@@ -3,11 +3,13 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query private var todoItems: [TodoItem]
     @Query private var storedGroups: [TodoGroup]
 
     @State private var draftGroupName = ""
-    @State private var selection: SidebarSelection = .filter(.active)
+    @State private var selection: SidebarSelection? = .filter(.active)
+    @State private var isShowingGroupCreator = false
     @State private var draggedGroupID: UUID?
 
     private var groups: [TodoGroup] {
@@ -17,7 +19,7 @@ struct ContentView: View {
     private var sortedItems: [TodoItem] {
         let filtered: [TodoItem]
         switch selection {
-        case let .filter(filter):
+        case let .filter(filter)?:
             switch filter {
             case .active:
                 filtered = todoItems.filter { !$0.isCompleted }
@@ -26,9 +28,9 @@ struct ContentView: View {
             case .all:
                 filtered = todoItems
             }
-        case let .group(groupID):
+        case let .group(groupID)?:
             filtered = todoItems.filter { TodoGroupResolver.group(for: $0, groups: groups).id == groupID }
-        case .islandSettings, .aiSettings, .reminderSettings, .appSettings:
+        case .islandSettings, .aiSettings, .reminderSettings, .appSettings, .none:
             filtered = todoItems
         }
         return TodoSorter.sorted(filtered, groups: groups)
@@ -67,11 +69,15 @@ struct ContentView: View {
         if selectedGroup != nil {
             return "\(sortedItems.count) 项属于此分组"
         }
-        return activeCount == 0 ? "当前没有进行中的事项" : "\(activeCount) 项正在进行"
-    }
-
-    private var activeCount: Int {
-        todoItems.filter { !$0.isCompleted }.count
+        switch selectedFilter {
+        case .active:
+            let activeCount = todoItems.filter { !$0.isCompleted }.count
+            return activeCount == 0 ? "当前没有进行中的事项" : "\(activeCount) 项正在进行"
+        case .completed:
+            return "\(todoItems.filter(\.isCompleted).count) 项已完成"
+        case .all:
+            return "共 \(todoItems.count) 项"
+        }
     }
 
     var body: some View {
@@ -81,13 +87,16 @@ struct ContentView: View {
             switch selection {
             case .filter, .group:
                 VStack(spacing: 0) {
-                    header
-                    Divider()
-                    toolbar
-                    Divider()
+                    if let selectedGroup {
+                        selectedGroupEditor(selectedGroup)
+                        Divider()
+                    }
                     todoList
                 }
                 .frame(minWidth: 560, minHeight: 440)
+                .navigationTitle(detailTitle)
+                .navigationSubtitle(detailSubtitle)
+                .toolbar { detailToolbar }
             case .islandSettings:
                 IslandSettingsView()
                     .frame(minWidth: 560, minHeight: 440)
@@ -100,12 +109,14 @@ struct ContentView: View {
             case .appSettings:
                 AppSettingsView()
                     .frame(minWidth: 560, minHeight: 440)
+            case nil:
+                Color.clear
             }
         }
     }
 
     private var sidebar: some View {
-        List {
+        List(selection: $selection) {
             Section("待办") {
                 sidebarButton(.filter(.active), title: "进行中", systemImage: "circle")
                 sidebarButton(.filter(.completed), title: "已完成", systemImage: "checkmark.circle")
@@ -132,7 +143,7 @@ struct ContentView: View {
             }
         }
         .navigationTitle("barNoticer")
-        .frame(minWidth: 150)
+        .frame(minWidth: 180)
     }
 
     private func groupDragPreview(_ group: TodoGroup) -> some View {
@@ -175,128 +186,75 @@ struct ContentView: View {
         .padding(.vertical, 4)
         .background(sidebarGroupRowBackground(for: group), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         .contentShape(Rectangle())
-        .onTapGesture {
-            selection = .group(group.id)
-        }
         .dropDestination(for: String.self) { droppedIDs, _ in
             return reorderGroup(from: droppedIDs, near: group)
         } isTargeted: { isTargeted in
             draggedGroupID = isTargeted ? group.id : nil
         }
+        .tag(SidebarSelection.group(group.id))
         .listRowInsets(EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 12))
         .listRowBackground(Color.clear)
         .help("拖动改变分组顺序")
     }
 
     private func sidebarButton(_ target: SidebarSelection, title: String, systemImage: String) -> some View {
-        sidebarButton(target) {
-            Text(title)
-        } icon: {
-            Image(systemName: systemImage)
-        }
-    }
-
-    private func sidebarButton<Title: View, Icon: View>(
-        _ target: SidebarSelection,
-        @ViewBuilder title: () -> Title,
-        @ViewBuilder icon: () -> Icon
-    ) -> some View {
-        Button {
-            selection = target
-        } label: {
-            Label {
-                title()
-            } icon: {
-                icon()
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(sidebarRowBackground(for: target))
-    }
-
-    private func sidebarRowBackground(for target: SidebarSelection) -> Color {
-        if selection == target {
-            return Color.accentColor.opacity(0.16)
-        }
-        return Color.clear
+        Label(title, systemImage: systemImage)
+            .tag(target)
     }
 
     private func sidebarGroupRowBackground(for group: TodoGroup) -> Color {
         if group.id == draggedGroupID {
             return Color.primary.opacity(0.09)
         }
-        if selection == .group(group.id) {
-            return Color.accentColor.opacity(0.16)
-        }
         return Color.clear
     }
 
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(detailTitle)
-                    .font(.system(size: 28, weight: .semibold))
-                Text(detailSubtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
+    /// 新建事项与新建分组进入工具栏；分组创建使用小 popover。
+    @ToolbarContentBuilder
+    private var detailToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .primaryAction) {
             Button {
                 showTodoCreationPanel()
             } label: {
                 Label("新建事项", systemImage: "plus")
             }
-            .buttonStyle(.borderedProminent)
+            .help("新建事项")
 
             Button {
-                seedExamplesIfNeeded()
+                isShowingGroupCreator = true
             } label: {
-                Label("示例", systemImage: "sparkles")
+                Label("新建分组", systemImage: "folder.badge.plus")
             }
-            .buttonStyle(.bordered)
-            .disabled(!todoItems.isEmpty)
-            .help("添加几条示例待办")
-        }
-        .padding(24)
-    }
-
-    private var toolbar: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                Spacer()
-
-                groupCreator
+            .popover(isPresented: $isShowingGroupCreator, arrowEdge: .bottom) {
+                groupCreatorPopover
             }
-
-            if let selectedGroup {
-                selectedGroupEditor(selectedGroup)
-            }
-        }
-        .padding(24)
-        .onChange(of: selection) { _, newSelection in
-            if case let .group(groupID) = newSelection {
-                _ = groupID
-            }
+            .help("新建分组")
         }
     }
 
-    private var groupCreator: some View {
-        HStack(spacing: 8) {
-            TextField("新分组", text: $draftGroupName)
+    private var groupCreatorPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("新建分组")
+                .font(.headline)
+            TextField("分组名称", text: $draftGroupName)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 120)
                 .onSubmit(addGroup)
-
-            Button {
-                addGroup()
-            } label: {
-                Label("分组", systemImage: "folder.badge.plus")
+            HStack {
+                Spacer()
+                Button("取消", role: .cancel) {
+                    isShowingGroupCreator = false
+                }
+                Button("创建") {
+                    addGroup()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(trimmedDraftGroupName.isEmpty)
             }
-            .disabled(trimmedDraftGroupName.isEmpty)
+        }
+        .frame(width: 240)
+        .padding(14)
+        .onAppear {
+            draftGroupName = ""
         }
     }
 
@@ -308,7 +266,10 @@ struct ContentView: View {
 
             TextField("分组名称", text: Binding(
                 get: { group.name },
-                set: { group.update(name: $0) }
+                set: {
+                    group.update(name: $0)
+                    try? modelContext.save()
+                }
             ))
             .textFieldStyle(.roundedBorder)
             .frame(width: 160)
@@ -316,10 +277,13 @@ struct ContentView: View {
 
             Picker("颜色", selection: Binding(
                 get: { group.colorHex },
-                set: { group.update(colorHex: $0) }
+                set: {
+                    group.update(colorHex: $0)
+                    try? modelContext.save()
+                }
             )) {
                 ForEach(TodoGroup.presetColorHexes, id: \.self) { hex in
-                    Label(hex, systemImage: "circle.fill")
+                    Label(TodoGroup.colorName(for: hex), systemImage: "circle.fill")
                         .foregroundStyle(Color(hex: hex) ?? .secondary)
                         .tag(hex)
                 }
@@ -337,6 +301,8 @@ struct ContentView: View {
                 }
             }
         }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 10)
     }
 
     private var todoList: some View {
@@ -365,6 +331,16 @@ struct ContentView: View {
             Text(selectedFilter.emptyMessage)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+            // 示例数据入口只在无事项时显示于空状态，不占常驻工具栏。
+            if todoItems.isEmpty, selectedFilter != .completed {
+                Button {
+                    seedExamplesIfNeeded()
+                } label: {
+                    Label("添加几条示例待办", systemImage: "sparkles")
+                }
+                .buttonStyle(.bordered)
+                .padding(.top, 4)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -383,7 +359,9 @@ struct ContentView: View {
             sortOrder: TodoGroupResolver.nextSortOrder(in: groups)
         )
         modelContext.insert(group)
+        try? modelContext.save()
         draftGroupName = ""
+        isShowingGroupCreator = false
         selection = .group(group.id)
     }
 
@@ -391,6 +369,7 @@ struct ContentView: View {
         for index in offsets {
             modelContext.delete(sortedItems[index])
         }
+        try? modelContext.save()
     }
 
     private func deleteGroup(_ group: TodoGroup) {
@@ -399,6 +378,7 @@ struct ContentView: View {
             item.updateGroup(nil)
         }
         modelContext.delete(group)
+        try? modelContext.save()
         selection = .filter(.active)
     }
 
@@ -410,8 +390,12 @@ struct ContentView: View {
             return false
         }
 
-        withAnimation(.smooth(duration: 0.24)) {
+        if reduceMotion {
             TodoGroupResolver.moveGroup(in: groups, moving: movingID, near: targetGroup.id)
+        } else {
+            withAnimation(.smooth(duration: 0.24)) {
+                TodoGroupResolver.moveGroup(in: groups, moving: movingID, near: targetGroup.id)
+            }
         }
         try? modelContext.save()
         draggedGroupID = nil
@@ -425,8 +409,12 @@ struct ContentView: View {
             return false
         }
 
-        withAnimation(.smooth(duration: 0.24)) {
+        if reduceMotion {
             TodoGroupResolver.moveGroup(in: groups, moving: movingID, to: groups.count - 1)
+        } else {
+            withAnimation(.smooth(duration: 0.24)) {
+                TodoGroupResolver.moveGroup(in: groups, moving: movingID, to: groups.count - 1)
+            }
         }
         try? modelContext.save()
         draggedGroupID = nil
@@ -445,6 +433,7 @@ struct ContentView: View {
         modelContext.insert(TodoItem(title: "整理今天最重要的三件事", priority: .high, deadlineAt: Date().addingTimeInterval(7_200)))
         modelContext.insert(TodoItem(title: "回复项目进展消息", priority: .medium, groupID: work.id))
         modelContext.insert(TodoItem(title: "清理桌面临时文件", priority: .low))
+        try? modelContext.save()
     }
 }
 

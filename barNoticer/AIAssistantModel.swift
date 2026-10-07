@@ -434,27 +434,7 @@ final class AIAssistantModel: ObservableObject {
     }
 
     func referencedTodo(id: UUID) -> AIReferencedTodo {
-        guard let items = try? modelContext.fetch(FetchDescriptor<TodoItem>()),
-              let item = items.first(where: { $0.id == id })
-        else {
-            return AIReferencedTodo(id: id, title: "事项", priority: .low, groupName: nil, scheduleText: nil, createdAt: nil, isCompleted: false, exists: false)
-        }
-        let groups = (try? modelContext.fetch(FetchDescriptor<TodoGroup>())) ?? []
-        let group = TodoGroupResolver.group(for: item, groups: groups)
-        return AIReferencedTodo(
-            id: id,
-            title: item.title,
-            priority: item.priority,
-            groupName: group.name,
-            scheduleText: TodoDeadlineFormatter.cardText(for: item),
-            createdAt: item.createdAt,
-            isCompleted: item.isCompleted,
-            exists: true
-        )
-    }
-
-    func titleForReferencedTodo(id: UUID) -> String {
-        referencedTodo(id: id).title
+        AITodoLookup.referencedTodo(id: id, in: modelContext)
     }
 
     private func syncConversationState() {
@@ -516,6 +496,7 @@ struct AIReferencedTodo: Equatable, Identifiable {
     let createdAt: Date?
     let isCompleted: Bool
     let exists: Bool
+    var readFailed: Bool = false
 
     var ageText: String {
         guard let createdAt else { return "" }

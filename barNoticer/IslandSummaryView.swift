@@ -16,6 +16,7 @@ enum IslandSummaryRefreshPolicy {
 
 struct IslandSummaryView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var contentVisibility: IslandContentVisibilityModel
     @Query private var todoItems: [TodoItem]
     @Query private var storedGroups: [TodoGroup]
@@ -42,7 +43,8 @@ struct IslandSummaryView: View {
     }
 
     private var activeItems: [TodoItem] {
-        TodoSorter.sorted(todoItems, groups: groups, now: now).filter { !$0.isCompleted }
+        // 先过滤未完成再排序，不给已完成事项计算日程与比较键。
+        TodoSorter.sorted(todoItems.filter { !$0.isCompleted }, groups: groups, now: now)
     }
 
     private var groups: [TodoGroup] {
@@ -50,11 +52,11 @@ struct IslandSummaryView: View {
     }
 
     private var visibleDisplayGroups: [TodoDisplayGroup] {
-        TodoSorter.displayGroups(items: IslandStandardTodoPolicy.items(from: activeItems), groups: groups, now: now)
+        TodoSorter.displayGroups(items: activeItems, groups: groups, now: now)
     }
 
     private var visiblePriorityGroups: [TodoPriorityGroup] {
-        TodoSorter.priorityGroups(IslandStandardTodoPolicy.items(from: activeItems), now: now)
+        TodoSorter.priorityGroups(activeItems, now: now)
     }
 
     private var topBridgeHeight: CGFloat {
@@ -83,22 +85,32 @@ struct IslandSummaryView: View {
             now = Date()
         }
         .onReceive(Timer.publish(every: IslandSummaryRefreshPolicy.timelineInterval, on: .main, in: .common).autoconnect()) { date in
-            now = date
+            // 岛隐藏时不刷新相对时间文案；重新显示时立即更新。
+            if contentVisibility.isVisible {
+                now = date
+            }
+        }
+        .onChange(of: contentVisibility.isVisible) { _, visible in
+            if visible {
+                now = Date()
+            }
         }
     }
 
     private var islandContent: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // 同次渲染使用一个派生结果，避免多个 computed property 独立重复排序。
+        let active = activeItems
+        return VStack(alignment: .leading, spacing: 0) {
             Color.clear
                 .frame(height: topBridgeHeight)
 
             VStack(alignment: .leading, spacing: 11) {
-                header
+                header(activeCount: active.count)
                 Group {
                     if mode == .wide {
-                        wideTodoContent
+                        wideTodoContent(activeItems: active)
                     } else {
-                        standardTodoContent
+                        standardTodoContent(activeItems: active)
                     }
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
@@ -112,13 +124,13 @@ struct IslandSummaryView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    private var header: some View {
+    private func header(activeCount: Int) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text("待办岛")
                     .font(.headline)
                     .foregroundStyle(.white)
-                Text(activeItems.isEmpty ? "没有进行中的事项" : "\(activeItems.count) 项进行中")
+                Text(activeCount == 0 ? "没有进行中的事项" : "\(activeCount) 项进行中")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(IslandSummaryStyle.secondaryTextOpacity))
             }
@@ -128,16 +140,6 @@ struct IslandSummaryView: View {
             createTodoButton
             groupingToggle
             modeToggle
-
-            if let first = activeItems.first {
-                Label(first.priority.title, systemImage: first.priority.systemImage)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(first.priority.islandColor)
-                    .labelStyle(.titleAndIcon)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .background(first.priority.islandColor.opacity(0.14), in: Capsule())
-            }
         }
     }
 
@@ -157,8 +159,12 @@ struct IslandSummaryView: View {
 
     private var modeToggle: some View {
         Button {
-            withAnimation(.smooth(duration: IslandAnimationTimings.modeSwitchDuration)) {
+            if reduceMotion {
                 modeRawValue = mode == .standard ? IslandDisplayMode.wide.rawValue : IslandDisplayMode.standard.rawValue
+            } else {
+                withAnimation(.smooth(duration: IslandAnimationTimings.modeSwitchDuration)) {
+                    modeRawValue = mode == .standard ? IslandDisplayMode.wide.rawValue : IslandDisplayMode.standard.rawValue
+                }
             }
             IslandLayoutSettings.notifyLayoutChanged()
         } label: {
@@ -174,8 +180,12 @@ struct IslandSummaryView: View {
 
     private var groupingToggle: some View {
         Button {
-            withAnimation(.smooth(duration: IslandAnimationTimings.modeSwitchDuration)) {
+            if reduceMotion {
                 groupingModeRawValue = groupingMode == .priority ? IslandGroupingMode.group.rawValue : IslandGroupingMode.priority.rawValue
+            } else {
+                withAnimation(.smooth(duration: IslandAnimationTimings.modeSwitchDuration)) {
+                    groupingModeRawValue = groupingMode == .priority ? IslandGroupingMode.group.rawValue : IslandGroupingMode.priority.rawValue
+                }
             }
         } label: {
             Image(systemName: groupingMode.systemImage)
@@ -200,7 +210,7 @@ struct IslandSummaryView: View {
         .padding(.vertical, 8)
     }
 
-    private var standardTodoContent: some View {
+    private func standardTodoContent(activeItems: [TodoItem]) -> some View {
         Group {
             if activeItems.isEmpty {
                 emptyState
@@ -250,14 +260,14 @@ struct IslandSummaryView: View {
         }
     }
 
-    private var wideTodoContent: some View {
+    private func wideTodoContent(activeItems: [TodoItem]) -> some View {
         Group {
             if activeItems.isEmpty {
                 emptyState
             } else if groupingMode == .priority {
                 HStack(alignment: .top, spacing: 10) {
                     ForEach(TodoPriority.allCases) { priority in
-                        IslandPriorityColumn(priority: priority, items: wideItems(for: priority), groups: groups, now: now)
+                        IslandPriorityColumn(priority: priority, items: IslandWideTodoPolicy.items(for: priority, from: activeItems), groups: groups, now: now)
                     }
                 }
                 .transition(.asymmetric(
@@ -338,10 +348,6 @@ struct IslandSummaryView: View {
         "拖动改变分组顺序"
     }
 
-    private func wideItems(for priority: TodoPriority) -> [TodoItem] {
-        IslandWideTodoPolicy.items(for: priority, from: activeItems)
-    }
-
     private func islandGroupDragPreview(_ group: TodoGroup) -> some View {
         HStack(spacing: 7) {
             Circle()
@@ -374,8 +380,12 @@ struct IslandSummaryView: View {
             return false
         }
 
-        withAnimation(.smooth(duration: 0.26)) {
+        if reduceMotion {
             TodoGroupResolver.moveGroup(in: groups, moving: movingID, near: targetGroup.id)
+        } else {
+            withAnimation(.smooth(duration: 0.26)) {
+                TodoGroupResolver.moveGroup(in: groups, moving: movingID, near: targetGroup.id)
+            }
         }
         try? modelContext.save()
         targetedGroupID = nil
@@ -389,8 +399,12 @@ struct IslandSummaryView: View {
             return false
         }
 
-        withAnimation(.smooth(duration: 0.26)) {
+        if reduceMotion {
             TodoGroupResolver.moveGroup(in: groups, moving: movingID, to: groups.count - 1)
+        } else {
+            withAnimation(.smooth(duration: 0.26)) {
+                TodoGroupResolver.moveGroup(in: groups, moving: movingID, to: groups.count - 1)
+            }
         }
         try? modelContext.save()
         targetedGroupID = nil
@@ -401,12 +415,6 @@ struct IslandSummaryView: View {
 enum IslandWideTodoPolicy {
     static func items(for priority: TodoPriority, from items: [TodoItem]) -> [TodoItem] {
         items.filter { $0.priority == priority }
-    }
-}
-
-enum IslandStandardTodoPolicy {
-    static func items(from items: [TodoItem]) -> [TodoItem] {
-        items
     }
 }
 
@@ -491,10 +499,6 @@ private struct IslandPriorityColumn: View {
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(.white.opacity(IslandSummaryStyle.itemBackgroundOpacity), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .stroke(priority.islandColor.opacity(0.18), lineWidth: 1)
-        }
     }
 }
 
@@ -529,10 +533,6 @@ private struct IslandPrioritySection: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
         .background(.white.opacity(IslandSummaryStyle.itemBackgroundOpacity), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .stroke(priority.islandColor.opacity(0.22), lineWidth: 1)
-        }
     }
 }
 
@@ -588,10 +588,6 @@ private struct IslandDisplayGroupSection: View {
         .padding(.vertical, 9)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(.white.opacity(IslandSummaryStyle.itemBackgroundOpacity), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .stroke(displayGroup.group.color.opacity(0.26), lineWidth: 1)
-        }
     }
 }
 
@@ -600,6 +596,7 @@ private struct IslandTodoLineList: View {
     let groups: [TodoGroup]
     let now: Date
     let showsGroupName: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expandedItemID: UUID?
 
     var body: some View {
@@ -613,8 +610,12 @@ private struct IslandTodoLineList: View {
                     isExpanded: expandedItemID == item.id
                 ) {
                     guard item.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { return }
-                    withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                    if reduceMotion {
                         expandedItemID = expandedItemID == item.id ? nil : item.id
+                    } else {
+                        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                            expandedItemID = expandedItemID == item.id ? nil : item.id
+                        }
                     }
                 }
 
@@ -629,6 +630,7 @@ private struct IslandTodoLineList: View {
 }
 
 private struct IslandTodoLine: View {
+    @Environment(\.modelContext) private var modelContext
     @Bindable var item: TodoItem
     let groups: [TodoGroup]
     let now: Date
@@ -645,6 +647,7 @@ private struct IslandTodoLine: View {
                     } else {
                         item.updateCompletion(true)
                     }
+                    try? modelContext.save()
                 } label: {
                     Image(systemName: "circle")
                         .font(.system(size: 15, weight: .medium))

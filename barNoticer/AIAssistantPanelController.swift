@@ -10,6 +10,7 @@ final class AIAssistantPanelController {
     private let replyPresenter: any AIAssistantReplyPresenting
     private var replyCancellable: AnyCancellable?
     private var heightCancellable: AnyCancellable?
+    private var screenParametersObserver: NSObjectProtocol?
     private var presentationGeneration = 0
     private(set) var isPresented = false
 
@@ -22,6 +23,12 @@ final class AIAssistantPanelController {
                 guard let self, reply.sessionID == self.model.sessionID else { return }
                 self.show()
             }
+        }
+    }
+
+    deinit {
+        if let screenParametersObserver {
+            NotificationCenter.default.removeObserver(screenParametersObserver)
         }
     }
 
@@ -42,11 +49,13 @@ final class AIAssistantPanelController {
         let panel = panel ?? makePanel(model: assistantModel)
         self.panel = panel
         observeHeight(for: assistantModel, panel: panel)
+        observeScreenChanges(panel: panel)
         resize(panel, to: AIAssistantPanelChrome.size(
             outputKind: AIAssistantPanelChrome.outputKind(response: assistantModel.response, proposals: assistantModel.proposals, state: assistantModel.state),
             hasImages: !assistantModel.images.isEmpty,
             hasImageError: assistantModel.imageInputError != nil
         ), animated: false)
+        // 以当前交互屏幕为准定位；高度变化时保持底边锚定。
         center(panel)
         panel.alphaValue = 0
         NSApp.activate(ignoringOtherApps: true)
@@ -59,9 +68,7 @@ final class AIAssistantPanelController {
             metadata: ["isKeyWindow": "\(panel.isKeyWindow)", "canBecomeKey": "\(panel.canBecomeKey)"]
         )
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.18
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        NSAnimationContext.runAnimation(duration: 0.18, timing: CAMediaTimingFunction(name: .easeOut)) {
             panel.animator().alphaValue = 1
         }
     }
@@ -71,11 +78,9 @@ final class AIAssistantPanelController {
         isPresented = false
         presentationGeneration += 1
         let generation = presentationGeneration
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.14
-            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+        NSAnimationContext.runAnimation(duration: 0.14, timing: CAMediaTimingFunction(name: .easeIn)) {
             panel.animator().alphaValue = 0
-        } completionHandler: { [weak self, weak panel] in
+        } completion: { [weak self, weak panel] in
             Task { @MainActor [weak self, weak panel] in
                 guard let self, self.presentationGeneration == generation, !self.isPresented else { return }
                 panel?.orderOut(nil)
@@ -97,6 +102,22 @@ final class AIAssistantPanelController {
             guard self?.model.isChoosingImages != true else { return }
             guard self?.model.memoryClearConfirmation == nil else { return }
             self?.close()
+        }
+    }
+
+    /// 屏幕参数变化（外接、分辨率调整）后重新执行边界约束。
+    private func observeScreenChanges(panel: NSPanel) {
+        guard screenParametersObserver == nil else { return }
+        screenParametersObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self, weak panel] _ in
+            Task { @MainActor [weak self, weak panel] in
+                guard let self, let panel, self.isPresented else { return }
+                let size = panel.frame.size
+                self.resize(panel, to: size, animated: false)
+            }
         }
     }
 
@@ -123,32 +144,52 @@ final class AIAssistantPanelController {
     }
 
     private func resize(_ panel: NSPanel, to size: CGSize, animated: Bool) {
-        guard panel.frame.size != size else { return }
+        // 尺寸限制在目标屏幕内，保留最小可用尺寸，不产生负数宽高。
+        let screenFrame = (panel.screen ?? NSScreen.main)?.visibleFrame
+            ?? CGRect(x: 0, y: 0, width: 1_280, height: 800)
+        let margin: CGFloat = 12
+        let clamped = CGSize(
+            width: min(max(size.width, 360), screenFrame.width - margin * 2),
+            height: min(max(size.height, 128), screenFrame.height - margin * 2)
+        )
+        // 顶部锚定：输入行位置稳定，结果区向下扩展。
         let current = panel.frame
         let next = CGRect(
-            x: current.midX - size.width / 2,
-            y: current.maxY - size.height,
-            width: size.width,
-            height: size.height
+            x: current.midX - clamped.width / 2,
+            y: current.maxY - clamped.height,
+            width: clamped.width,
+            height: clamped.height
         )
+        let constrained = constrain(next, to: screenFrame)
+        guard panel.frame != constrained else { return }
         if animated, panel.isVisible {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.22
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                panel.animator().setFrame(next, display: true)
+            NSAnimationContext.runAnimation(duration: 0.22, timing: CAMediaTimingFunction(name: .easeInEaseOut)) {
+                panel.animator().setFrame(constrained, display: true)
             }
         } else {
-            panel.setFrame(next, display: true)
+            panel.setFrame(constrained, display: true)
         }
     }
 
     private func center(_ panel: NSPanel) {
-        let screenFrame = NSScreen.main?.visibleFrame ?? .zero
+        // 使用当前交互屏幕；整个 frame 的四边限制在 visibleFrame 内，四周至少 12 pt。
+        let screen = panel.screen ?? NSScreen.main
+        let screenFrame = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1_280, height: 800)
         let size = panel.frame.size
-        panel.setFrameOrigin(CGPoint(
+        let ideal = CGRect(
             x: screenFrame.midX - size.width / 2,
-            y: screenFrame.midY + screenFrame.height * 0.12
-        ))
+            y: screenFrame.midY + screenFrame.height * 0.12 - size.height / 2,
+            width: size.width,
+            height: size.height
+        )
+        panel.setFrame(constrain(ideal, to: screenFrame), display: false)
+    }
+
+    private func constrain(_ frame: CGRect, to visibleFrame: CGRect) -> CGRect {
+        let margin: CGFloat = 12
+        let x = min(max(frame.minX, visibleFrame.minX + margin), visibleFrame.maxX - margin - frame.width)
+        let y = min(max(frame.minY, visibleFrame.minY + margin), visibleFrame.maxY - margin - frame.height)
+        return CGRect(x: x, y: y, width: frame.width, height: frame.height)
     }
 }
 
@@ -214,8 +255,9 @@ enum AIAssistantPanelChrome {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.backgroundColor = .clear
         panel.isOpaque = false
-        panel.appearance = NSAppearance(named: .darkAqua)
-        panel.hasShadow = false
+        // 不强制外观：SwiftUI 材质与 AppKit 编辑器随系统浅/深色自适应。
+        // 系统窗口阴影作为唯一阴影来源，内容层不叠加 SwiftUI 阴影。
+        panel.hasShadow = true
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.contentView = contentView
@@ -229,7 +271,6 @@ enum AIAssistantPanelChrome {
         contentView.layer?.cornerRadius = cornerRadius
         contentView.layer?.cornerCurve = .continuous
         contentView.layer?.backgroundColor = NSColor.clear.cgColor
-        contentView.appearance = NSAppearance(named: .darkAqua)
     }
 }
 

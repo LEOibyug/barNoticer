@@ -10,17 +10,6 @@ final class IslandPanelStateTests: XCTestCase {
         XCTAssertTrue(IslandPanelPresentation.collectionBehavior.contains(.ignoresCycle))
     }
 
-    func testIslandSummaryStyleKeepsSecondaryTextReadableOnBlackIsland() {
-        XCTAssertGreaterThanOrEqual(IslandSummaryStyle.secondaryTextOpacity, 0.74)
-        XCTAssertGreaterThanOrEqual(IslandSummaryStyle.tertiaryTextOpacity, 0.64)
-        XCTAssertGreaterThanOrEqual(IslandSummaryStyle.subtleTextOpacity, 0.6)
-        XCTAssertGreaterThanOrEqual(IslandSummaryStyle.itemBackgroundOpacity, 0.1)
-    }
-
-    func testIslandSummaryRefreshesRelativeTimeEveryMinute() {
-        XCTAssertLessThanOrEqual(IslandSummaryRefreshPolicy.timelineInterval, 60)
-    }
-
     func testRepeatedShowWhileOpeningDoesNotRestartTransition() {
         var state = IslandPanelState()
 

@@ -9,8 +9,7 @@ final class ScheduledReminderTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 2_000_000_000)
 
     func testCreatingTodoThroughAIStoresReminderInContext() throws {
-        let container = try ModelContainer(for: TodoItem.self, TodoGroup.self, DailySummary.self,
-                                           configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let container = try TestSupport.makeInMemoryContainer()
         let executor = AIToolExecutor(modelContext: container.mainContext)
         let call = AIToolCall(id: "create", type: "function", function: .init(name: "create_todo", arguments:
             #"{"title":"提交作业","priority":"high","deadline_at":"2026-10-09T10:00:00Z","reminder_minutes_before":30}"#))
@@ -228,6 +227,45 @@ final class ScheduledReminderTests: XCTestCase {
         add(attachment)
     }
 
+    func testNoPendingRemindersLeavesNoArmedTimer() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        fixture.scheduler.start()
+        // 无待提醒事项且无重试时不装周期兜底 timer，等待数据事件唤醒。
+        XCTAssertFalse(fixture.scheduler.isTimerArmed)
+
+        let item = TodoItem(title: "未来事项", deadlineAt: now.addingTimeInterval(1_800), reminderMinutesBefore: 10)
+        fixture.container.mainContext.insert(item)
+        fixture.scheduler.refresh(now: now)
+        XCTAssertTrue(fixture.scheduler.isTimerArmed)
+
+        fixture.container.mainContext.delete(item)
+        try fixture.container.mainContext.save()
+        fixture.scheduler.refresh(now: now)
+        XCTAssertFalse(fixture.scheduler.isTimerArmed)
+    }
+
+    func testAITimersFollowPollingToggleIndependentlyOfScheduledReminders() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let scheduler = ReminderScheduler(
+            modelContext: fixture.container.mainContext,
+            engine: fixture.engine,
+            presenter: ReminderPresenter(modelContext: fixture.container.mainContext, historyStore: ReminderHistoryStore(), defaults: fixture.defaults),
+            historyStore: ReminderHistoryStore(),
+            defaults: fixture.defaults
+        )
+        // AI 关闭：AI 轮询与默认 DDL 扫描 timer 均不存在；用户主动定时提醒仍继续运行。
+        scheduler.start()
+        XCTAssertFalse(scheduler.aiTimersArmed)
+
+        ReminderSettings(aiPollingEnabled: true, systemNotificationsEnabled: false, scheduledAIWordingEnabled: false).save(to: fixture.defaults)
+        XCTAssertTrue(scheduler.aiTimersArmed)
+
+        ReminderSettings(aiPollingEnabled: false, systemNotificationsEnabled: false, scheduledAIWordingEnabled: false).save(to: fixture.defaults)
+        XCTAssertFalse(scheduler.aiTimersArmed)
+    }
+
     private final class Fixture {
         let suite = "ScheduledReminderTests-\(UUID().uuidString)"
         let defaults: UserDefaults
@@ -244,8 +282,7 @@ final class ScheduledReminderTests: XCTestCase {
             keyStore.saveAPIKey("test")
             ScheduledWordingURLProtocol.responseDelay = 0
             ScheduledWordingURLProtocol.requestCount = 0
-            container = try ModelContainer(for: TodoItem.self, TodoGroup.self, DailySummary.self,
-                                           configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+            container = try TestSupport.makeInMemoryContainer()
             let config = URLSessionConfiguration.ephemeral
             config.protocolClasses = [ScheduledWordingURLProtocol.self]
             engine = AIReminderEngine(modelContext: container.mainContext,
