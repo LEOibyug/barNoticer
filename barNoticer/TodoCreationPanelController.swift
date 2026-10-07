@@ -92,7 +92,7 @@ final class TodoCreationPanelController {
 }
 
 enum TodoCreationPanelChrome {
-    static let size = CGSize(width: 640, height: 258)
+    static let size = CGSize(width: 640, height: 300)
     static let cornerRadius: CGFloat = 18
 }
 
@@ -138,6 +138,7 @@ private struct TodoCreationPanelView: View {
     @State private var groupID = TodoGroup.defaultGroupID
     @State private var scheduleKind = TodoScheduleKind.none
     @State private var deadline = Date().addingTimeInterval(3_600)
+    @State private var reminderMinutesBefore: Int?
     @State private var firstScheduledTime = Date().addingTimeInterval(3_600)
     @State private var secondScheduledTime = Date().addingTimeInterval(7_200)
     @State private var recurrenceRule = TodoRecurrenceRule.daily
@@ -159,6 +160,10 @@ private struct TodoCreationPanelView: View {
             primaryRow
             controls
             scheduleRow
+            if scheduleKind == .singleDeadline {
+                TodoReminderEditor(minutesBefore: $reminderMinutesBefore)
+                    .frame(height: 30, alignment: .leading)
+            }
             noteField
         }
         .padding(18)
@@ -289,7 +294,7 @@ private struct TodoCreationPanelView: View {
         HStack(spacing: 10) {
             switch scheduleKind {
             case .none:
-                Label("不设置提醒时间", systemImage: "calendar.badge.minus")
+                Label("不设置时间计划", systemImage: "calendar.badge.minus")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             case .singleDeadline:
@@ -359,7 +364,8 @@ private struct TodoCreationPanelView: View {
             deadlineAt: schedule.deadlineAt,
             scheduledTimes: schedule.scheduledTimes,
             recurrenceRule: schedule.recurrenceRule,
-            recurrenceAnchor: schedule.recurrenceAnchor
+            recurrenceAnchor: schedule.recurrenceAnchor,
+            reminderMinutesBefore: scheduleKind == .singleDeadline ? reminderMinutesBefore : nil
         )
         modelContext.insert(item)
         try? modelContext.save()

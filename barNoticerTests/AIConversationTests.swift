@@ -25,7 +25,7 @@ final class AIConversationTests: XCTestCase {
         XCTAssertEqual(history.visibleEntries.map(\.content), ["今天做什么", "先处理高优先级"])
     }
 
-    func testConversationHistoryCanBeClearedWhenPanelCloses() {
+    func testConversationHistoryCanBeClearedForNewConversation() {
         var history = AIConversationHistory(maxTurns: 3)
         history.appendUser("新增一个事项")
         history.appendAssistant("已提出新增事项")

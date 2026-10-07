@@ -5,18 +5,28 @@ import SwiftUI
 
 @MainActor
 final class AIAssistantPanelController {
-    private let modelContext: ModelContext
     private var panel: NSPanel?
-    private var model: AIAssistantModel?
+    private let model: AIAssistantModel
+    private let replyPresenter: any AIAssistantReplyPresenting
+    private var replyCancellable: AnyCancellable?
     private var heightCancellable: AnyCancellable?
-    private var isClosing = false
+    private var presentationGeneration = 0
+    private(set) var isPresented = false
 
-    init(modelContext: ModelContext) {
-        self.modelContext = modelContext
+    init(modelContext: ModelContext, model: AIAssistantModel? = nil, replyPresenter: (any AIAssistantReplyPresenting)? = nil) {
+        self.model = model ?? AIAssistantModel(modelContext: modelContext)
+        self.replyPresenter = replyPresenter ?? ReminderPresenter(modelContext: modelContext)
+        replyCancellable = self.model.completedReplies.sink { [weak self] reply in
+            guard let self, !self.isPresented, reply.sessionID == self.model.sessionID else { return }
+            self.replyPresenter.presentAssistantReply(reply) { [weak self] in
+                guard let self, reply.sessionID == self.model.sessionID else { return }
+                self.show()
+            }
+        }
     }
 
     func toggle() {
-        if panel?.isVisible == true {
+        if isPresented {
             close()
         } else {
             show()
@@ -24,15 +34,19 @@ final class AIAssistantPanelController {
     }
 
     func show() {
-        let assistantModel = model ?? AIAssistantModel(modelContext: modelContext)
-        assistantModel.resetTransientOutput()
-        model = assistantModel
+        let assistantModel = model
+        presentationGeneration += 1
+        isPresented = true
+        replyPresenter.dismissAssistantReply()
 
         let panel = panel ?? makePanel(model: assistantModel)
         self.panel = panel
-        isClosing = false
         observeHeight(for: assistantModel, panel: panel)
-        resize(panel, to: AIAssistantPanelChrome.size(hasVisibleConversation: assistantModel.hasVisibleConversation, hasTransientOutput: assistantModel.hasTransientOutput), animated: false)
+        resize(panel, to: AIAssistantPanelChrome.size(
+            outputKind: AIAssistantPanelChrome.outputKind(response: assistantModel.response, proposals: assistantModel.proposals, state: assistantModel.state),
+            hasImages: !assistantModel.images.isEmpty,
+            hasImageError: assistantModel.imageInputError != nil
+        ), animated: false)
         center(panel)
         panel.alphaValue = 0
         NSApp.activate(ignoringOtherApps: true)
@@ -53,39 +67,51 @@ final class AIAssistantPanelController {
     }
 
     func close() {
-        guard let panel else { return }
-        guard !isClosing else { return }
-        isClosing = true
+        guard let panel, isPresented else { return }
+        isPresented = false
+        presentationGeneration += 1
+        let generation = presentationGeneration
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.14
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().alphaValue = 0
         } completionHandler: { [weak self, weak panel] in
             Task { @MainActor [weak self, weak panel] in
+                guard let self, self.presentationGeneration == generation, !self.isPresented else { return }
                 panel?.orderOut(nil)
-                self?.model?.resetSessionForContextRefresh()
-                self?.isClosing = false
             }
         }
     }
 
+    func startNewConversation() {
+        replyPresenter.dismissAssistantReply()
+        model.startNewConversation()
+    }
+
     private func makePanel(model: AIAssistantModel) -> NSPanel {
-        AIAssistantPanelChrome.makePanel(contentView: NSHostingView(rootView: AIAssistantPanelView(model: model) { [weak self] in
-            self?.close()
-        })) { [weak self] in
+        AIAssistantPanelChrome.makePanel(contentView: NSHostingView(rootView: AIAssistantPanelView(
+            model: model,
+            close: { [weak self] in self?.close() },
+            newConversation: { [weak self] in self?.startNewConversation() }
+        ))) { [weak self] in
+            guard self?.model.isChoosingImages != true else { return }
             self?.close()
         }
     }
 
     private func observeHeight(for model: AIAssistantModel, panel: NSPanel) {
         heightCancellable = Publishers.CombineLatest3(model.$response, model.$proposals, model.$state)
-            .map { response, proposals, state in
-                AIAssistantPanelChrome.size(
+            .combineLatest(model.$images, model.$imageInputError)
+            .map { output, images, imageError in
+                let (response, proposals, state) = output
+                return AIAssistantPanelChrome.size(
                     outputKind: AIAssistantPanelChrome.outputKind(
                         response: response,
                         proposals: proposals,
                         state: state
-                    )
+                    ),
+                    hasImages: !images.isEmpty,
+                    hasImageError: imageError != nil
                 )
             }
             .removeDuplicates()
@@ -155,6 +181,11 @@ enum AIAssistantPanelChrome {
         case .actionConfirmation:
             return expandedSize
         }
+    }
+
+    static func size(outputKind: OutputKind, hasImages: Bool, hasImageError: Bool) -> CGSize {
+        let base = size(outputKind: outputKind)
+        return CGSize(width: base.width, height: base.height + (hasImages ? 76 : 0) + (hasImageError ? 28 : 0))
     }
 
     static func outputKind(response: String, proposals: [AIActionProposal], state: AIAssistantModel.State) -> OutputKind {

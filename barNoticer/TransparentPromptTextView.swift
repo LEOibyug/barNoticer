@@ -49,9 +49,22 @@ struct TransparentPromptEditor: NSViewRepresentable {
     @Binding var isComposingText: Bool
     var focusRequestID: UUID
     var onSubmit: () -> Void
+    var onPasteImages: ((NSPasteboard) -> Bool)? = nil
 
     func makeNSView(context: Context) -> TransparentPromptField {
         let field = TransparentPromptField()
+        let cell = ImagePromptCell(textCell: "")
+        cell.imageEditor.onPasteImages = onPasteImages
+        field.cell = cell
+        field.isBordered = false
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.font = .systemFont(ofSize: 18, weight: .medium)
+        field.textColor = .white
+        field.isEditable = true
+        field.isSelectable = true
+        cell.isScrollable = true
+        cell.wraps = false
         field.delegate = context.coordinator
         field.target = context.coordinator
         field.action = #selector(Coordinator.submit)
@@ -69,6 +82,8 @@ struct TransparentPromptEditor: NSViewRepresentable {
     }
 
     func updateNSView(_ field: TransparentPromptField, context: Context) {
+        (field.cell as? ImagePromptCell)?.imageEditor.onPasteImages = onPasteImages
+        field.isEditable = context.environment.isEnabled
         Self.synchronize(field, with: text)
         guard let window = field.window else { return }
         guard context.coordinator.shouldRequestFocus(focusRequestID) else { return }
@@ -151,6 +166,35 @@ struct TransparentPromptEditor: NSViewRepresentable {
             }
             return false
         }
+    }
+}
+
+private final class ImagePromptCell: NSTextFieldCell {
+    let imageEditor = ImagePromptFieldEditor()
+
+    override func fieldEditor(for controlView: NSView) -> NSTextView? {
+        imageEditor.isFieldEditor = true
+        imageEditor.isRichText = false
+        imageEditor.drawsBackground = false
+        return imageEditor
+    }
+}
+
+final class ImagePromptFieldEditor: NSTextView {
+    var onPasteImages: ((NSPasteboard) -> Bool)?
+
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        [.png, .tiff, .fileURL] + super.readablePasteboardTypes
+    }
+
+    override func readSelection(from pasteboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if onPasteImages?(pasteboard) == true { return true }
+        return super.readSelection(from: pasteboard, type: type)
+    }
+
+    override func paste(_ sender: Any?) {
+        if onPasteImages?(NSPasteboard.general) == true { return }
+        super.paste(sender)
     }
 }
 

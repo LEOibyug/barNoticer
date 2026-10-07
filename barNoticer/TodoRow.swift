@@ -9,6 +9,8 @@ struct TodoRow: View {
     @State private var editedTitle = ""
     @State private var hasDeadline = false
     @State private var editedDeadline = Date().addingTimeInterval(3_600)
+    @State private var editedReminderMinutesBefore: Int?
+    @State private var scheduleWasEdited = false
     @State private var editedScheduleKind = TodoScheduleKind.none
     @State private var firstScheduledTime = Date().addingTimeInterval(3_600)
     @State private var secondScheduledTime = Date().addingTimeInterval(7_200)
@@ -58,12 +60,18 @@ struct TodoRow: View {
             editedTitle = newTitle
         }
         .onChange(of: item.updatedAt) { _, _ in
-            syncDeadlineState()
+            if !isShowingSettings { syncDeadlineState() }
             if noteText == nil {
                 isNoteExpanded = false
             }
         }
-        .sheet(isPresented: $isShowingSettings) {
+        .sheet(isPresented: Binding(
+            get: { isShowingSettings },
+            set: { isPresented in
+                if !isPresented { commitScheduleSettings() }
+                isShowingSettings = isPresented
+            }
+        )) {
             settingsSheet
         }
     }
@@ -128,6 +136,7 @@ struct TodoRow: View {
                 Spacer()
 
                 Button {
+                    commitScheduleSettings()
                     isShowingSettings = false
                 } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -197,11 +206,20 @@ struct TodoRow: View {
 
                 Section("时间计划") {
                     scheduleEditor
+                    if editedScheduleKind == .singleDeadline {
+                        TodoReminderEditor(minutesBefore: $editedReminderMinutesBefore)
+                        if let minutes = editedReminderMinutesBefore {
+                            Text("提醒时间：\(editedDeadline.addingTimeInterval(-Double(minutes) * 60).formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
 
                 Section {
                     HStack {
                         Button(role: .destructive) {
+                            editedReminderMinutesBefore = nil
                             modelContext.delete(item)
                             isShowingSettings = false
                         } label: {
@@ -213,6 +231,7 @@ struct TodoRow: View {
                         Button("完成") {
                             commitTitle()
                             commitNote()
+                            commitScheduleSettings()
                             isShowingSettings = false
                         }
                         .keyboardShortcut(.defaultAction)
@@ -252,7 +271,7 @@ struct TodoRow: View {
                         get: { editedDeadline },
                         set: { date in
                             editedDeadline = date
-                            applyScheduleEditor()
+                            scheduleWasEdited = true
                         }
                     ), displayedComponents: [.date, .hourAndMinute])
                     .labelsHidden()
@@ -265,7 +284,7 @@ struct TodoRow: View {
                         get: { firstScheduledTime },
                         set: { date in
                             firstScheduledTime = date
-                            applyScheduleEditor()
+                            scheduleWasEdited = true
                         }
                     ), displayedComponents: [.date, .hourAndMinute])
                     .labelsHidden()
@@ -278,7 +297,7 @@ struct TodoRow: View {
                         get: { secondScheduledTime },
                         set: { date in
                             secondScheduledTime = date
-                            applyScheduleEditor()
+                            scheduleWasEdited = true
                         }
                     ), displayedComponents: [.date, .hourAndMinute])
                     .labelsHidden()
@@ -296,7 +315,7 @@ struct TodoRow: View {
                                     set: { days in
                                         customRecurrenceDays = max(1, days)
                                         recurrenceRule = .everyNDays(customRecurrenceDays)
-                                        applyScheduleEditor()
+                                        scheduleWasEdited = true
                                     }
                                 ),
                                 in: 1...365
@@ -315,7 +334,7 @@ struct TodoRow: View {
                         get: { recurrenceAnchor },
                         set: { date in
                             recurrenceAnchor = date
-                            applyScheduleEditor()
+                            scheduleWasEdited = true
                         }
                     ), displayedComponents: [.date, .hourAndMinute])
                     .labelsHidden()
@@ -329,7 +348,7 @@ struct TodoRow: View {
             get: { editedScheduleKind },
             set: { kind in
                 editedScheduleKind = kind
-                applyScheduleEditor()
+                scheduleWasEdited = true
             }
         )) {
             Text("无时间").tag(TodoScheduleKind.none)
@@ -346,10 +365,10 @@ struct TodoRow: View {
             get: { recurrenceRule },
             set: { rule in
                 recurrenceRule = rule
+                scheduleWasEdited = true
                 if let days = rule.intervalDays {
                     customRecurrenceDays = days
                 }
-                applyScheduleEditor()
             }
         )) {
             ForEach(recurrencePickerRules) { rule in
@@ -439,6 +458,8 @@ struct TodoRow: View {
     }
 
     private func syncDeadlineState() {
+        scheduleWasEdited = false
+        editedReminderMinutesBefore = item.reminderMinutesBefore
         editedScheduleKind = item.scheduleKind
         hasDeadline = item.hasSchedule
         if let deadlineAt = item.deadlineAt ?? item.nextOccurrence() {
@@ -463,6 +484,15 @@ struct TodoRow: View {
 
     private func syncNoteState() {
         editedNote = item.note ?? ""
+    }
+
+    private func commitScheduleSettings() {
+        guard item.modelContext != nil, !item.isDeleted else { return }
+        if scheduleWasEdited { applyScheduleEditor() }
+        let minutes = editedScheduleKind == .singleDeadline ? editedReminderMinutesBefore : nil
+        if item.reminderMinutesBefore != minutes { item.updateReminder(minutesBefore: minutes) }
+        try? modelContext.save()
+        scheduleWasEdited = false
     }
 
     private func applyScheduleEditor() {

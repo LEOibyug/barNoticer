@@ -27,9 +27,12 @@ enum ReminderDeadlineOffset: String, Codable, Equatable {
 enum ReminderTrigger: Codable, Equatable {
     case deadline(todoID: UUID, offset: ReminderDeadlineOffset)
     case aiPoll
+    case scheduledDeadline(todoID: UUID, deadline: Date, minutesBefore: Int)
 
     var key: String {
         switch self {
+        case let .scheduledDeadline(todoID, deadline, minutes):
+            return "scheduledDeadline:\(todoID.uuidString):\(deadline.timeIntervalSince1970):\(minutes)"
         case let .deadline(todoID, offset):
             return "deadline:\(todoID.uuidString):\(offset.rawValue)"
         case .aiPoll:
@@ -39,6 +42,8 @@ enum ReminderTrigger: Codable, Equatable {
 
     var title: String {
         switch self {
+        case let .scheduledDeadline(_, _, minutes):
+            return TodoScheduledReminder.label(minutes: minutes)
         case let .deadline(_, offset):
             return "DDL \(offset.title)"
         case .aiPoll:
@@ -50,16 +55,23 @@ enum ReminderTrigger: Codable, Equatable {
         case kind
         case todoID
         case offset
+        case deadline
+        case minutesBefore
     }
 
     enum Kind: String, Codable {
         case deadline
         case aiPoll
+        case scheduledDeadline
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
+        case .scheduledDeadline:
+            self = .scheduledDeadline(todoID: try container.decode(UUID.self, forKey: .todoID),
+                                      deadline: try container.decode(Date.self, forKey: .deadline),
+                                      minutesBefore: try container.decode(Int.self, forKey: .minutesBefore))
         case .deadline:
             self = .deadline(
                 todoID: try container.decode(UUID.self, forKey: .todoID),
@@ -73,6 +85,11 @@ enum ReminderTrigger: Codable, Equatable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
+        case let .scheduledDeadline(todoID, deadline, minutes):
+            try container.encode(Kind.scheduledDeadline, forKey: .kind)
+            try container.encode(todoID, forKey: .todoID)
+            try container.encode(deadline, forKey: .deadline)
+            try container.encode(minutes, forKey: .minutesBefore)
         case let .deadline(todoID, offset):
             try container.encode(Kind.deadline, forKey: .kind)
             try container.encode(todoID, forKey: .todoID)

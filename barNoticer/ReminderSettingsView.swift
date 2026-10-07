@@ -6,7 +6,7 @@ struct ReminderSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                SettingsSection(title: "AI 轮询", subtitle: "AI 轮询默认关闭，避免自动产生 API 成本。") {
+                SettingsSection(title: "AI 主动提醒", subtitle: "关闭后停止 AI 轮询和自动 DDL 判断，不影响任务中主动设置的定时提醒。") {
                     Toggle("启用后台 AI 提醒判断", isOn: binding(\.aiPollingEnabled))
                     Picker("轮询频率", selection: binding(\.pollingInterval)) {
                         Text("15 分钟").tag(TimeInterval(900))
@@ -19,6 +19,13 @@ struct ReminderSettingsView: View {
                             Text(tone.title).tag(tone)
                         }
                     }
+                }
+
+                SettingsSection(title: "任务定时提醒", subtitle: "在单次 DDL 任务的新建或设置界面选择提前多久提醒。由本地定时触发，不依赖 AI 判断。") {
+                    Toggle("使用 AI 编写定时提醒文案", isOn: binding(\.scheduledAIWordingEnabled))
+                    Text("开启后会提前调用 AI 生成文案。到点时文案尚未生成或 AI 不可用，会使用本地文案；不会延迟或取消提醒。应用需保持运行，休眠期间错过的提醒会在唤醒后补发一次。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 SettingsSection(title: "提醒呈现", subtitle: "测试提醒会展示完整热区闪烁和提醒面板；调整外扩时只显示范围边界。") {
@@ -54,7 +61,7 @@ struct ReminderSettingsView: View {
                     ReminderSettingSlider("持续时间", value: binding(\.reminderPanelAutoCloseDelay), range: 1...15, suffix: "秒", preview: ReminderSettings.requestPanelPreview)
                 }
 
-                Text("DDL 会在提前 1 天和提前 12 小时进入 AI 判断。")
+                Text("启用 AI 主动提醒时，DDL 会在提前 1 天和提前 12 小时进入 AI 判断。任务主动设置的提醒按各自时间独立触发。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

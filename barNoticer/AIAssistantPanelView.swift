@@ -24,6 +24,7 @@ enum AIAssistantPanelStyle {
 struct AIAssistantPanelView: View {
     @ObservedObject var model: AIAssistantModel
     var close: () -> Void
+    var newConversation: (() -> Void)? = nil
 
     private var hasVisibleResponse: Bool {
         AIVisibleResponse.hasVisibleContent(model.response)
@@ -31,6 +32,33 @@ struct AIAssistantPanelView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Text("AI 助手")
+                    .font(.caption.weight(.semibold))
+                if model.state == .loading {
+                    Text("关闭窗口后会继续处理")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    if let newConversation { newConversation() }
+                    else { model.startNewConversation() }
+                } label: {
+                    Label("新对话", systemImage: "square.and.pencil")
+                }
+                .buttonStyle(.plain)
+                .font(.caption.weight(.medium))
+                .help(model.state == .loading ? "停止当前请求并开始新对话，已执行的操作会保留" : "清空当前上下文并开始新对话")
+                Button(action: close) {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("隐藏聊天窗口")
+                .help("隐藏窗口，保留会话并继续后台处理")
+            }
+            .foregroundStyle(.white.opacity(AIAssistantPanelStyle.secondaryTextOpacity))
+
             HStack(spacing: 12) {
                 Image(systemName: "sparkles")
                     .font(.system(size: 18, weight: .semibold))
@@ -49,11 +77,31 @@ struct AIAssistantPanelView: View {
                         text: $model.prompt,
                         isComposingText: $model.isComposingPromptText,
                         focusRequestID: model.focusRequestID,
-                        onSubmit: model.submit
+                        onSubmit: model.submit,
+                        onPasteImages: model.pasteImages
                     )
+                    .disabled(model.state == .loading)
                     .opacity(model.progress.displayText.isEmpty ? 1 : 0)
                 }
                 .frame(height: AIAssistantPanelStyle.promptFieldHeight)
+
+                Button(action: model.chooseImages) {
+                    Image(systemName: "photo.badge.plus")
+                        .font(.system(size: 18))
+                }
+                .buttonStyle(.plain)
+                .disabled(model.state == .loading || model.images.count >= AIImageAttachment.maxCount)
+                .help("添加图片，也可用 ⌘V 粘贴截图（最多 4 张）")
+                .accessibilityLabel("添加图片")
+
+                Button(action: model.submit) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 23))
+                }
+                .buttonStyle(.plain)
+                .disabled(!model.canSubmit)
+                .help("发送文字和图片")
+                .accessibilityLabel("发送")
             }
             .padding(.horizontal, 13)
             .padding(.vertical, 9)
@@ -63,6 +111,44 @@ struct AIAssistantPanelView: View {
                     .stroke(.white.opacity(AIAssistantPanelStyle.borderOpacity), lineWidth: 1)
             }
             .animation(.easeInOut(duration: 0.18), value: model.progress)
+
+            if !model.images.isEmpty {
+                HStack(spacing: 10) {
+                    ForEach(model.images) { attachment in
+                        ZStack(alignment: .topTrailing) {
+                            if let preview = attachment.preview {
+                                Image(nsImage: preview)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 88, height: 64)
+                                    .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .help(attachment.name)
+                                    .accessibilityLabel(attachment.name)
+                            }
+                            Button { model.removeImage(id: attachment.id) } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(.white, .black)
+                            }
+                            .buttonStyle(.plain)
+                            .help("移除 \(attachment.name)")
+                            .accessibilityLabel("移除 \(attachment.name)")
+                            .padding(3)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    Text("\(model.images.count)/4")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let error = model.imageInputError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red.opacity(0.95))
+            }
 
             if !model.proposals.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
@@ -86,6 +172,7 @@ struct AIAssistantPanelView: View {
                         Button("全部执行") {
                             model.applyAllProposals()
                         }
+                        .disabled(model.state == .loading)
                         .buttonStyle(.borderedProminent)
                         .font(.caption.weight(.semibold))
                     }
@@ -216,6 +303,11 @@ private struct AIProposalRow: View {
 
                 if let todoID = proposal.referencedTodoID {
                     AITodoReferenceCard(todo: model.referencedTodo(id: todoID))
+                    if let reminderChange = proposal.reminderChangeSummary {
+                        Text(reminderChange)
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(AIAssistantPanelStyle.secondaryTextOpacity))
+                    }
                 } else {
                     Text(proposal.summary)
                         .font(.subheadline.weight(.medium))
@@ -239,6 +331,7 @@ private struct AIProposalRow: View {
             Button("执行") {
                 model.apply(proposal)
             }
+            .disabled(model.state == .loading)
             .buttonStyle(.borderedProminent)
         }
         .padding(10)

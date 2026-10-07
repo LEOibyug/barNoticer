@@ -1,6 +1,8 @@
 import Combine
+import AppKit
 import Foundation
 import SwiftData
+import UniformTypeIdentifiers
 
 @MainActor
 final class AIAssistantModel: ObservableObject {
@@ -19,7 +21,12 @@ final class AIAssistantModel: ObservableObject {
     }
 
     @Published var prompt = ""
+    @Published private(set) var sessionID = UUID()
+    let completedReplies = PassthroughSubject<AIAssistantReply, Never>()
     @Published var isComposingPromptText = false
+    @Published private(set) var images: [AIImageAttachment] = []
+    @Published private(set) var imageInputError: String?
+    private(set) var isChoosingImages = false
     @Published private(set) var response = ""
     @Published private(set) var proposals: [AIActionProposal] = []
     @Published private(set) var state: State = .idle
@@ -36,6 +43,7 @@ final class AIAssistantModel: ObservableObject {
     private let defaults: UserDefaults
     private let logStore: AppDebugLogStore
     private let maxToolRounds = 6
+    private var requestTask: Task<Void, Never>?
 
     init(
         modelContext: ModelContext,
@@ -52,7 +60,67 @@ final class AIAssistantModel: ObservableObject {
     }
 
     var canSubmit: Bool {
-        !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && state != .loading
+        (!prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty)
+            && state != .loading && !isComposingPromptText
+    }
+
+    func addImages(_ attachments: [AIImageAttachment]) {
+        guard state != .loading else { return }
+        guard images.count + attachments.count <= AIImageAttachment.maxCount else {
+            imageInputError = AIImageAttachment.ImportError.tooMany.localizedDescription
+            return
+        }
+        images.append(contentsOf: attachments)
+        imageInputError = nil
+    }
+
+    func removeImage(id: UUID) {
+        images.removeAll { $0.id == id }
+        imageInputError = nil
+        requestInputFocus()
+    }
+
+    func chooseImages() {
+        guard state != .loading, let window = NSApp.keyWindow else { return }
+        let picker = NSOpenPanel()
+        picker.allowedContentTypes = [.image]
+        picker.allowsMultipleSelection = true
+        picker.canChooseDirectories = false
+        picker.prompt = "添加图片"
+        isChoosingImages = true
+        picker.beginSheetModal(for: window) { [weak self] result in
+            guard let self else { return }
+            self.isChoosingImages = false
+            if result == .OK { self.addImageURLs(picker.urls) }
+            window.makeKey()
+            self.requestInputFocus()
+        }
+    }
+
+    func addImageURLs(_ urls: [URL]) {
+        guard state != .loading else { return }
+        do {
+            guard images.count + urls.count <= AIImageAttachment.maxCount else {
+                throw AIImageAttachment.ImportError.tooMany
+            }
+            addImages(try urls.map { try AIImageAttachment(url: $0) })
+        } catch {
+            imageInputError = error.localizedDescription
+        }
+    }
+
+    /// Return false for ordinary text so AppKit keeps its normal paste behavior.
+    func pasteImages(from pasteboard: NSPasteboard) -> Bool {
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
+            addImageURLs(urls)
+            return true
+        }
+        guard let type = pasteboard.availableType(from: [.png, .tiff]), let data = pasteboard.data(forType: type) else {
+            return false
+        }
+        do { addImages([try AIImageAttachment(data: data, name: "粘贴的图片")]) }
+        catch { imageInputError = error.localizedDescription }
+        return true
     }
 
     var shouldShowPromptPlaceholder: Bool {
@@ -60,26 +128,31 @@ final class AIAssistantModel: ObservableObject {
     }
 
     func submit() {
+        guard canSubmit else { return }
         let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        let attachments = images
+        let previousConversation = conversation
 
         prompt = ""
+        images = []
+        imageInputError = nil
         isComposingPromptText = false
         response = ""
         proposals = []
         state = .loading
         progress = .thinking
-        conversation.appendUser(text)
+        conversation.appendUser(text, imageURLs: attachments.map(\.dataURL))
         syncConversationState()
-        log(.info, "AI request started", metadata: ["promptLength": "\(text.count)"])
+        log(.info, "AI request started", metadata: ["promptLength": "\(text.count)", "imageCount": "\(attachments.count)"])
         logChat(role: "User", content: text)
 
-        Task {
-            await run(prompt: text)
+        requestTask = Task {
+            await run(prompt: text, images: attachments, previousConversation: previousConversation)
         }
     }
 
     func apply(_ proposal: AIActionProposal) {
+        guard state != .loading else { return }
         do {
             try applyConfirmed(proposal)
             proposals.removeAll { $0.id == proposal.id && $0.summary == proposal.summary }
@@ -90,6 +163,7 @@ final class AIAssistantModel: ObservableObject {
     }
 
     func applyAllProposals() {
+        guard state != .loading else { return }
         do {
             for proposal in proposals {
                 try applyConfirmed(proposal)
@@ -126,32 +200,31 @@ final class AIAssistantModel: ObservableObject {
         proposals = []
     }
 
-    func resetTransientOutput() {
-        proposals = []
-        if !conversation.hasVisibleContent {
-            response = ""
-            state = .idle
-        }
-        progress = .idle
-        syncConversationState()
-    }
-
-    func resetSessionForContextRefresh() {
+    func startNewConversation() {
+        requestTask?.cancel()
+        requestTask = nil
+        sessionID = UUID()
         prompt = ""
+        images = []
+        imageInputError = nil
+        isComposingPromptText = false
         response = ""
         proposals = []
         state = .idle
         progress = .idle
         conversation.reset()
         syncConversationState()
+        requestInputFocus()
     }
 
     func requestInputFocus() {
         focusRequestID = UUID()
     }
 
-    private func run(prompt: String) async {
+    private func run(prompt: String, images: [AIImageAttachment], previousConversation: AIConversationHistory) async {
+        var hasAppliedActions = false
         do {
+            try Task.checkCancellation()
             let settings = AISettings(defaults: defaults)
             let apiKey = apiKeyStore.readAPIKey()
             let executor = AIToolExecutor(modelContext: modelContext)
@@ -167,6 +240,7 @@ final class AIAssistantModel: ObservableObject {
 
             for _ in 0..<maxToolRounds {
                 let result = try await client.send(messages: messages, settings: settings, apiKey: apiKey)
+                try Task.checkCancellation()
                 let sanitized = AIVisibleResponse.sanitized(result.content)
 
                 guard !result.toolCalls.isEmpty else {
@@ -198,9 +272,13 @@ final class AIAssistantModel: ObservableObject {
                     case let .proposal(proposal):
                         handledProposalCount += 1
                         pendingProposals.append(proposal)
-                        let toolMessage = settings.requiresActionConfirmation
-                            ? "已创建待确认操作：\(proposal.summary)"
-                            : try executor.apply(proposal).toolMessage
+                        let toolMessage: String
+                        if settings.requiresActionConfirmation {
+                            toolMessage = "已创建待确认操作：\(proposal.summary)"
+                        } else {
+                            toolMessage = try executor.apply(proposal).toolMessage
+                            hasAppliedActions = true
+                        }
                         messages.append(AIChatMessage(role: "tool", content: toolMessage, toolCallID: call.id))
                     }
                 }
@@ -208,6 +286,7 @@ final class AIAssistantModel: ObservableObject {
                 if settings.requiresActionConfirmation, !pendingProposals.isEmpty {
                     stageOrApply(pendingProposals, settings: settings)
                     let final = try await client.send(messages: messages, settings: settings, apiKey: apiKey)
+                    try Task.checkCancellation()
                     let visibleFinal = AIVisibleResponse.sanitized(final.content)
                     visibleResponse = visibleFinal.isEmpty
                         ? (sanitized.isEmpty ? AIVisibleResponse.fallbackText(toolNames: handledToolNames, proposalCount: handledProposalCount) : sanitized)
@@ -232,12 +311,37 @@ final class AIAssistantModel: ObservableObject {
             progress = .idle
             syncConversationState()
             log(.info, "AI request completed", metadata: ["toolCalls": "\(handledToolNames.count)", "proposals": "\(handledProposalCount)"])
+            publishCompletedReply()
         } catch {
+            guard !Task.isCancelled else { return }
+            if hasAppliedActions {
+                response = "部分操作已执行，但后续 AI 请求失败。请先检查事项列表，避免重复提交。"
+                conversation.appendAssistant(response)
+            } else if !proposals.isEmpty {
+                response = "操作已准备好，但后续 AI 请求失败。你仍可以确认或忽略这些操作。"
+                conversation.appendAssistant(response)
+            } else {
+                self.prompt = prompt
+                self.images = images
+                conversation = previousConversation
+            }
             state = .failed(error.localizedDescription)
             progress = .idle
             syncConversationState()
             log(.error, "AI request failed", metadata: ["error": error.localizedDescription])
+            publishCompletedReply()
         }
+    }
+
+    private func publishCompletedReply() {
+        let message: String
+        if case let .failed(error) = state {
+            message = response.isEmpty ? error : response + "\n" + error
+        } else {
+            message = response
+        }
+        completedReplies.send(AIAssistantReply(sessionID: sessionID, message: message,
+                                                pendingActionCount: proposals.count, isFailure: state.isFailure))
     }
 
     func completeReferencedTodo(id: UUID) {

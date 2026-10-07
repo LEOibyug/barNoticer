@@ -8,19 +8,22 @@ final class AIReminderEngine {
     private let apiKeyStore: AIAPIKeyStore
     private let historyStore: ReminderHistoryStore
     private let logStore: AppDebugLogStore
+    private let defaults: UserDefaults
 
     init(
         modelContext: ModelContext,
         client: AIClient = AIClient(),
         apiKeyStore: AIAPIKeyStore = .shared,
         historyStore: ReminderHistoryStore = ReminderHistoryStore(),
-        logStore: AppDebugLogStore = .shared
+        logStore: AppDebugLogStore = .shared,
+        defaults: UserDefaults = .standard
     ) {
         self.modelContext = modelContext
         self.client = client
         self.apiKeyStore = apiKeyStore
         self.historyStore = historyStore
         self.logStore = logStore
+        self.defaults = defaults
     }
 
     func decision(for trigger: ReminderTrigger, settings: ReminderSettings, now: Date = Date()) async -> ReminderDecision {
@@ -34,7 +37,7 @@ final class AIReminderEngine {
                 history: historyStore.recentEntries(now: now),
                 tone: settings.tone
             )
-            let aiSettings = AISettings(defaults: .standard)
+            let aiSettings = AISettings(defaults: defaults)
             let apiKey = apiKeyStore.readAPIKey()
             let messages = AIReminderPromptBuilder.messages(context: context, trigger: trigger)
             logReminderChat(role: "Prompt", content: messages.compactMap(\.content).joined(separator: "\n"))
@@ -45,12 +48,27 @@ final class AIReminderEngine {
             )
             logReminderChat(role: "Assistant", content: result.content)
             let decision = try ReminderDecisionParser.parse(result.content)
+            if case let .scheduledDeadline(todoID, _, _) = trigger {
+                guard decision.shouldRemind, !decision.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    return fallbackDecision(for: todoID) ?? ReminderDecision(shouldRemind: true, message: "到了你设置的提醒时间。", todoReferences: [todoID], snoozeSuggestion: nil)
+                }
+                let message = AITodoReferenceParser.parse(decision.message).compactMap { part -> String? in
+                    if case let .text(text) = part { return text }
+                    return nil
+                }.joined(separator: "\n")
+                return ReminderDecision(shouldRemind: true, message: message.isEmpty ? "到了你设置的提醒时间。" : message,
+                                        todoReferences: [todoID], snoozeSuggestion: nil)
+            }
             log(.info, "AI reminder decision", metadata: ["trigger": trigger.key, "shouldRemind": "\(decision.shouldRemind)"])
             return decision
         } catch {
             log(.error, "AI reminder failed", metadata: ["trigger": trigger.key, "error": error.localizedDescription])
-            guard case let .deadline(todoID, _) = trigger,
-                  let fallback = fallbackDecision(for: todoID)
+            let todoID: UUID
+            switch trigger {
+            case let .deadline(id, _), let .scheduledDeadline(id, _, _): todoID = id
+            case .aiPoll: return ReminderDecision(shouldRemind: false, message: "", todoReferences: [], snoozeSuggestion: nil)
+            }
+            guard let fallback = fallbackDecision(for: todoID)
             else {
                 return ReminderDecision(shouldRemind: false, message: "", todoReferences: [], snoozeSuggestion: nil)
             }
@@ -109,6 +127,9 @@ enum AIReminderPromptBuilder {
             "已有事项的 deadlineLocal 和 nextOccurrenceLocal 是按当前时区解释后的权威时间；不要根据 createdAt 或 updatedAt 推断截止日期。",
             "全部事项："
         ]
+        if case let .scheduledDeadline(todoID, deadline, minutes) = trigger {
+            lines.insert("用户已明确要求定时提醒，必须 should_remind=true；你只负责编写该事项的简短提醒文案，不能决定取消提醒。目标事项 id=\(todoID)，提醒时刻=\(iso8601(deadline.addingTimeInterval(-Double(minutes) * 60)))。文案可能提前生成，请写成届时展示的措辞，不要根据当前时间声称剩余多久，也不要涉及其他事项。", at: 0)
+        }
 
         for todo in context.todos {
             let deadline = todo.deadlineAt.map(iso8601) ?? "none"
@@ -221,7 +242,8 @@ private extension AIClient {
             throw AIClientError.missingAPIKey
         }
         guard settings.isValid else { throw AIClientError.invalidSettings }
-        let request = try AIChatRequestBuilder.make(messages: messages, settings: settings, apiKey: apiKey, tools: [])
+        var request = try AIChatRequestBuilder.make(messages: messages, settings: settings, apiKey: apiKey, tools: [])
+        request.timeoutInterval = 10
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AIClientError.invalidResponse

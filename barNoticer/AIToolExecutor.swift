@@ -50,7 +50,8 @@ final class AIToolExecutor {
                 deadlineAt: arguments.optionalDate("deadline_at"),
                 scheduledTimes: arguments.optionalDates("scheduled_times"),
                 recurrenceRule: arguments.optionalRecurrenceRule("recurrence_rule", intervalDaysKey: "recurrence_interval_days"),
-                recurrenceAnchor: arguments.optionalDate("recurrence_anchor")
+                recurrenceAnchor: arguments.optionalDate("recurrence_anchor"),
+                reminderMinutesBefore: try arguments.reminderMinutes()
             ))
         case "update_todo":
             return .proposal(.updateTodo(
@@ -65,7 +66,9 @@ final class AIToolExecutor {
                 recurrenceAnchor: arguments.optionalDate("recurrence_anchor"),
                 clearsNote: arguments.optionalBool("clear_note") ?? false,
                 clearsDeadline: arguments.optionalBool("clear_deadline") ?? false,
-                clearsSchedule: arguments.optionalBool("clear_schedule") ?? false
+                clearsSchedule: arguments.optionalBool("clear_schedule") ?? false,
+                reminderMinutesBefore: try arguments.reminderMinutes(),
+                clearsReminder: arguments.optionalBool("clear_reminder") ?? false
             ))
         case "complete_todo":
             return .proposal(.completeTodo(id: try arguments.uuid("id")))
@@ -101,7 +104,13 @@ final class AIToolExecutor {
     @discardableResult
     func apply(_ proposal: AIActionProposal) throws -> AIActionApplicationResult {
         switch proposal {
-        case let .createTodo(id, title, note, priority, groupID, deadlineAt, scheduledTimes, recurrenceRule, recurrenceAnchor):
+        case let .createTodo(id, title, note, priority, groupID, deadlineAt, scheduledTimes, recurrenceRule, recurrenceAnchor, reminderMinutes):
+            if reminderMinutes != nil {
+                guard deadlineAt != nil, scheduledTimes.isEmpty, recurrenceRule == nil,
+                      (0...TodoScheduledReminder.maximumMinutes).contains(reminderMinutes!) else {
+                    throw AIToolExecutorError.invalidArguments
+                }
+            }
             modelContext.insert(TodoItem(
                 id: id,
                 title: title,
@@ -111,12 +120,21 @@ final class AIToolExecutor {
                 deadlineAt: deadlineAt,
                 scheduledTimes: scheduledTimes,
                 recurrenceRule: recurrenceRule,
-                recurrenceAnchor: recurrenceAnchor
+                recurrenceAnchor: recurrenceAnchor,
+                reminderMinutesBefore: reminderMinutes
             ))
             try modelContext.save()
             return .createdTodo(id: id, title: title)
-        case let .updateTodo(id, title, note, priority, groupID, deadlineAt, scheduledTimes, recurrenceRule, recurrenceAnchor, clearsNote, clearsDeadline, clearsSchedule):
+        case let .updateTodo(id, title, note, priority, groupID, deadlineAt, scheduledTimes, recurrenceRule, recurrenceAnchor, clearsNote, clearsDeadline, clearsSchedule, reminderMinutes, clearsReminder):
             let item = try fetchTodo(id: id)
+            if let reminderMinutes {
+                guard !clearsReminder, !clearsDeadline, !clearsSchedule,
+                      scheduledTimes.isEmpty, recurrenceRule == nil, recurrenceAnchor == nil,
+                      deadlineAt != nil || item.scheduleKind == .singleDeadline,
+                      (0...TodoScheduledReminder.maximumMinutes).contains(reminderMinutes) else {
+                    throw AIToolExecutorError.invalidArguments
+                }
+            }
             if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 item.updateTitle(title)
             }
@@ -143,6 +161,8 @@ final class AIToolExecutor {
             if clearsDeadline || clearsSchedule {
                 item.clearSchedule()
             }
+            if let reminderMinutes { item.updateReminder(minutesBefore: reminderMinutes) }
+            if clearsReminder { item.updateReminder(minutesBefore: nil) }
             try modelContext.save()
             return .updatedTodo(id: id)
         case let .completeTodo(id):
@@ -314,6 +334,16 @@ private struct ToolArguments {
         if let value = values[key] as? Int { return value }
         if let value = values[key] as? Double { return Int(value) }
         return nil
+    }
+
+    func reminderMinutes() throws -> Int? {
+        guard let value = values["reminder_minutes_before"], !(value is NSNull) else { return nil }
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.isFinite, number.doubleValue.rounded() == number.doubleValue,
+              (0...Double(TodoScheduledReminder.maximumMinutes)).contains(number.doubleValue) else {
+            throw AIToolExecutorError.invalidArguments
+        }
+        return number.intValue
     }
 
     func priority(_ key: String) throws -> TodoPriority {

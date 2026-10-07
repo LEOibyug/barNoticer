@@ -9,6 +9,8 @@ final class TodoItem {
     var priorityRawValue: String
     var groupID: UUID?
     var deadlineAt: Date?
+    var reminderMinutesBefore: Int?
+    var lastDeliveredReminderKey: String?
     var scheduledTimesData: Data?
     var recurrenceRuleRawValue: String?
     var recurrenceAnchor: Date?
@@ -96,12 +98,20 @@ final class TodoItem {
 
     func updateDeadline(_ deadlineAt: Date?) {
         self.deadlineAt = deadlineAt
+        if deadlineAt == nil { updateReminder(minutesBefore: nil) }
         if deadlineAt != nil {
             scheduledTimesData = nil
             recurrenceRuleRawValue = nil
             recurrenceAnchor = nil
             lastCompletedOccurrenceAt = nil
         }
+        updatedAt = Date()
+    }
+
+    func updateReminder(minutesBefore: Int?) {
+        let value = minutesBefore.map { min(TodoScheduledReminder.maximumMinutes, max(0, $0)) }
+        if value != reminderMinutesBefore { lastDeliveredReminderKey = nil }
+        reminderMinutesBefore = value
         updatedAt = Date()
     }
 
@@ -113,6 +123,7 @@ final class TodoItem {
         clearsSchedule: Bool = false
     ) {
         if clearsSchedule {
+            updateReminder(minutesBefore: nil)
             self.deadlineAt = nil
             self.scheduledTimesData = nil
             self.recurrenceRuleRawValue = nil
@@ -123,6 +134,9 @@ final class TodoItem {
         }
 
         self.deadlineAt = deadlineAt
+        if deadlineAt == nil || !scheduledTimes.isEmpty || recurrenceRule != nil {
+            updateReminder(minutesBefore: nil)
+        }
         self.scheduledTimesData = scheduledTimes.isEmpty ? nil : try? JSONEncoder.iso8601Encoder.encode(scheduledTimes.sorted())
         self.recurrenceRuleRawValue = recurrenceRule?.rawValue
         self.recurrenceAnchor = recurrenceAnchor
@@ -152,6 +166,7 @@ final class TodoItem {
     }
 
     func clearSchedule() {
+        updateReminder(minutesBefore: nil)
         deadlineAt = nil
         scheduledTimesData = nil
         recurrenceRuleRawValue = nil
@@ -173,7 +188,8 @@ final class TodoItem {
         lastCompletedOccurrenceAt: Date? = nil,
         isCompleted: Bool = false,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        reminderMinutesBefore: Int? = nil
     ) {
         self.id = id
         self.title = title
@@ -181,6 +197,7 @@ final class TodoItem {
         self.priorityRawValue = priority.rawValue
         self.groupID = groupID == TodoGroup.defaultGroupID ? nil : groupID
         self.deadlineAt = deadlineAt
+        self.reminderMinutesBefore = reminderMinutesBefore
         self.scheduledTimesData = scheduledTimes.isEmpty ? nil : try? JSONEncoder.iso8601Encoder.encode(scheduledTimes.sorted())
         self.recurrenceRuleRawValue = recurrenceRule?.rawValue
         self.recurrenceAnchor = recurrenceAnchor

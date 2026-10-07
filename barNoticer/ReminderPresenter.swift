@@ -4,22 +4,36 @@ import SwiftUI
 import UserNotifications
 
 @MainActor
-final class ReminderPresenter {
+final class ReminderPresenter: AIAssistantReplyPresenting, ReminderPresenting {
     private let modelContext: ModelContext
     private let historyStore: ReminderHistoryStore
     private let logStore: AppDebugLogStore
+    private let defaults: UserDefaults
     private var flashPanel: NSPanel?
     private var reminderPanel: NSPanel?
     private var previewGeneration = 0
+    private var pendingAssistantReplyID: UUID?
+    private var isShowingAssistantReply = false
+    private weak var assistantFlashPanel: NSPanel?
+    private struct PendingPanel {
+        let decision: ReminderDecision
+        let entryID: UUID?
+        let autoClose: Bool
+        let reply: AIAssistantReply?
+        let onOpenChat: (() -> Void)?
+    }
+    private var pendingPanels: [PendingPanel] = []
 
     init(
         modelContext: ModelContext,
         historyStore: ReminderHistoryStore = ReminderHistoryStore(),
-        logStore: AppDebugLogStore = .shared
+        logStore: AppDebugLogStore = .shared,
+        defaults: UserDefaults = .standard
     ) {
         self.modelContext = modelContext
         self.historyStore = historyStore
         self.logStore = logStore
+        self.defaults = defaults
 
         NotificationCenter.default.addObserver(
             self,
@@ -68,6 +82,39 @@ final class ReminderPresenter {
             Task { @MainActor [weak self] in
                 self?.showPanel(decision: decision, entryID: entry.id)
             }
+        }
+    }
+
+    func presentAssistantReply(_ reply: AIAssistantReply, onOpenChat: @escaping () -> Void) {
+        dismissAssistantReply()
+        let id = UUID()
+        pendingAssistantReplyID = id
+        let settings = ReminderSettings(defaults: defaults)
+        showFlash(expansion: settings.hotZoneFlashExpansion)
+        assistantFlashPanel = flashPanel
+        DispatchQueue.main.asyncAfter(deadline: .now() + ReminderPresentationTiming.panelDelayAfterFlash) { [weak self] in
+            guard let self, self.pendingAssistantReplyID == id else { return }
+            self.pendingAssistantReplyID = nil
+            self.showPanel(
+                decision: ReminderDecision(shouldRemind: true, message: reply.message, todoReferences: [], snoozeSuggestion: nil),
+                entryID: nil,
+                reply: reply,
+                onOpenChat: onOpenChat
+            )
+        }
+    }
+
+    func dismissAssistantReply() {
+        pendingAssistantReplyID = nil
+        pendingPanels.removeAll { $0.reply != nil }
+        if let assistantFlashPanel, assistantFlashPanel === flashPanel {
+            assistantFlashPanel.orderOut(nil)
+            flashPanel = nil
+        }
+        assistantFlashPanel = nil
+        if isShowingAssistantReply {
+            hidePanelImmediately()
+            showNextPanel()
         }
     }
 
@@ -146,6 +193,7 @@ final class ReminderPresenter {
     }
 
     private func showPreviewPanel(autoClose: Bool = true) {
+        hidePanelImmediately()
         let previewDecision = ReminderDecision(
             shouldRemind: true,
             message: "这是一条提醒预览。相关事项会统一放在文案下方。",
@@ -155,10 +203,16 @@ final class ReminderPresenter {
         showPanel(decision: previewDecision, entryID: UUID(), autoClose: autoClose)
     }
 
-    private func showPanel(decision: ReminderDecision, entryID: UUID, autoClose: Bool = true) {
+    private func showPanel(decision: ReminderDecision, entryID: UUID?, autoClose: Bool = true,
+                           reply: AIAssistantReply? = nil, onOpenChat: (() -> Void)? = nil) {
+        if reminderPanel != nil {
+            pendingPanels.append(PendingPanel(decision: decision, entryID: entryID, autoClose: autoClose,
+                                              reply: reply, onOpenChat: onOpenChat))
+            return
+        }
         let content = ReminderPanelContent.from(message: decision.message, explicitReferences: decision.todoReferences)
         let layout = IslandLayoutSettings(defaults: .standard)
-        let settings = ReminderSettings(defaults: .standard)
+        let settings = ReminderSettings(defaults: defaults)
         let screen = NSScreen.main
         let screenFrame = screen?.frame ?? .zero
         let safeAreaTop = screen?.safeAreaInsets.top ?? 0
@@ -166,7 +220,9 @@ final class ReminderPresenter {
         let frame = settings.reminderPanelFrame(in: screenFrame, islandLayout: layout, safeAreaTop: safeAreaTop)
 
         hidePanelImmediately()
+        isShowingAssistantReply = reply != nil
         let panel = ReminderPanel(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        panel.title = reply?.title ?? "提醒"
         panel.level = .statusBar
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -180,6 +236,10 @@ final class ReminderPresenter {
                 historyStore: historyStore,
                 entryID: entryID,
                 topContentInset: settings.reminderContentTopInset(safeAreaTop: safeAreaTop),
+                title: reply?.title ?? "提醒",
+                symbol: reply == nil ? "bell.badge.fill" : "sparkles",
+                openChatTitle: reply?.openButtonTitle,
+                onOpenChat: onOpenChat,
                 close: { [weak self] in self?.hidePanel() }
             )
             .frame(width: frame.width, height: frame.height)
@@ -213,6 +273,8 @@ final class ReminderPresenter {
                 guard let self, panel === self.reminderPanel else { return }
                 panel?.orderOut(nil)
                 self.reminderPanel = nil
+                self.isShowingAssistantReply = false
+                self.showNextPanel()
             }
         }
         if let revealView = panel.contentView as? ReminderPanelRevealView {
@@ -225,6 +287,14 @@ final class ReminderPresenter {
     private func hidePanelImmediately() {
         reminderPanel?.orderOut(nil)
         reminderPanel = nil
+        isShowingAssistantReply = false
+    }
+
+    private func showNextPanel() {
+        guard reminderPanel == nil, !pendingPanels.isEmpty else { return }
+        let next = pendingPanels.removeFirst()
+        showPanel(decision: next.decision, entryID: next.entryID, autoClose: next.autoClose,
+                  reply: next.reply, onOpenChat: next.onOpenChat)
     }
 
     private func sendSystemNotification(decision: ReminderDecision) async {
@@ -438,14 +508,18 @@ private struct ReminderPanelView: View {
     let content: ReminderPanelContent
     let modelContext: ModelContext
     let historyStore: ReminderHistoryStore
-    let entryID: UUID
+    let entryID: UUID?
     let topContentInset: CGFloat
+    let title: String
+    let symbol: String
+    let openChatTitle: String?
+    var onOpenChat: (() -> Void)?
     var close: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label("提醒", systemImage: "bell.badge.fill")
+                Label(title, systemImage: symbol)
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.96))
                 Spacer()
@@ -476,7 +550,7 @@ private struct ReminderPanelView: View {
                                 ReminderTodoCard(todo: referencedTodo(id: id)) {
                                     completeTodo(id: id)
                                 } snooze: {
-                                    historyStore.mark(id: entryID, status: .snoozed)
+                                    if let entryID { historyStore.mark(id: entryID, status: .snoozed) }
                                     close()
                                 }
                             }
@@ -487,11 +561,20 @@ private struct ReminderPanelView: View {
             }
             .frame(maxHeight: .infinity)
 
-            Button("知道了", action: close)
-                .buttonStyle(.borderedProminent)
-                .tint(.white.opacity(0.18))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity, alignment: .trailing)
+            HStack {
+                Spacer()
+                Button("知道了", action: close)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.white.opacity(0.18))
+                if let onOpenChat, let openChatTitle {
+                    Button(openChatTitle) {
+                        close()
+                        onOpenChat()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .foregroundStyle(.white)
         }
         .padding(.top, topContentInset)
         .padding(16)
@@ -517,7 +600,7 @@ private struct ReminderPanelView: View {
 
     private func completeTodo(id: UUID) {
         try? AIToolExecutor(modelContext: modelContext).apply(.completeTodo(id: id))
-        historyStore.mark(id: entryID, status: .dismissed)
+        if let entryID { historyStore.mark(id: entryID, status: .dismissed) }
     }
 }
 

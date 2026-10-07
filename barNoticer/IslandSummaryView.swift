@@ -482,7 +482,7 @@ private struct IslandPriorityColumn: View {
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .center)
             } else {
                 ScrollView(.vertical) {
-                    IslandTodoLineList(items: items, groups: groups, now: now)
+                    IslandTodoLineList(items: items, groups: groups, now: now, showsGroupName: true)
                 }
                 .scrollIndicators(.never)
             }
@@ -524,7 +524,7 @@ private struct IslandPrioritySection: View {
             }
             .foregroundStyle(priority.islandColor)
 
-            IslandTodoLineList(items: items, groups: groups, now: now)
+            IslandTodoLineList(items: items, groups: groups, now: now, showsGroupName: true)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
@@ -576,12 +576,12 @@ private struct IslandDisplayGroupSection: View {
 
             if allowsVerticalScroll {
                 ScrollView(.vertical) {
-                    IslandTodoLineList(items: displayGroup.items, groups: groups, now: now)
+                    IslandTodoLineList(items: displayGroup.items, groups: groups, now: now, showsGroupName: false)
                 }
                 .scrollIndicators(.never)
                 .frame(maxHeight: .infinity, alignment: .top)
             } else {
-                IslandTodoLineList(items: displayGroup.items, groups: groups, now: now)
+                IslandTodoLineList(items: displayGroup.items, groups: groups, now: now, showsGroupName: false)
             }
         }
         .padding(.horizontal, 10)
@@ -599,6 +599,7 @@ private struct IslandTodoLineList: View {
     let items: [TodoItem]
     let groups: [TodoGroup]
     let now: Date
+    let showsGroupName: Bool
     @State private var expandedItemID: UUID?
 
     var body: some View {
@@ -608,6 +609,7 @@ private struct IslandTodoLineList: View {
                     item: item,
                     groups: groups,
                     now: now,
+                    showsGroupName: showsGroupName,
                     isExpanded: expandedItemID == item.id
                 ) {
                     guard item.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { return }
@@ -630,6 +632,7 @@ private struct IslandTodoLine: View {
     @Bindable var item: TodoItem
     let groups: [TodoGroup]
     let now: Date
+    let showsGroupName: Bool
     let isExpanded: Bool
     let toggleExpansion: () -> Void
 
@@ -669,8 +672,9 @@ private struct IslandTodoLine: View {
                     }
 
                     HStack(spacing: 6) {
-                        Text(TodoAgeFormatter.elapsedText(since: item.createdAt, now: now))
-                        Text(TodoGroupResolver.group(for: item, groups: groups).name)
+                        if showsGroupName {
+                            Text(TodoGroupResolver.group(for: item, groups: groups).name)
+                        }
                         if let occurrence = item.nextOccurrence(after: now),
                            let scheduleText = TodoDeadlineFormatter.cardText(for: item, now: now) {
                             Text(scheduleText)

@@ -13,6 +13,7 @@ final class ReminderScheduler {
     private var pollTimer: Timer?
     private var settings: ReminderSettings
     private var isChecking = false
+    private let scheduledReminders: ScheduledReminderScheduler
 
     init(
         modelContext: ModelContext,
@@ -27,8 +28,9 @@ final class ReminderScheduler {
         self.defaults = defaults
         self.logStore = logStore
         self.settings = ReminderSettings(defaults: defaults)
-        self.engine = engine ?? AIReminderEngine(modelContext: modelContext, historyStore: historyStore, logStore: logStore)
+        self.engine = engine ?? AIReminderEngine(modelContext: modelContext, historyStore: historyStore, logStore: logStore, defaults: defaults)
         self.presenter = presenter ?? ReminderPresenter(modelContext: modelContext, historyStore: historyStore, logStore: logStore)
+        self.scheduledReminders = ScheduledReminderScheduler(modelContext: modelContext, presenter: self.presenter, engine: self.engine, defaults: defaults)
 
         NotificationCenter.default.addObserver(
             self,
@@ -45,6 +47,7 @@ final class ReminderScheduler {
     }
 
     func start() {
+        scheduledReminders.start()
         installDeadlineTimer()
         installPollTimer()
         Task { await checkDeadlineTriggers(now: Date()) }
@@ -80,6 +83,7 @@ final class ReminderScheduler {
     }
 
     private func checkDeadlineTriggers(now: Date) async {
+        guard settings.aiPollingEnabled else { return }
         do {
             let snapshots = try ReminderSnapshotBuilder.make(modelContext: modelContext, now: now)
             let triggers = ReminderDeadlinePolicy.dueTriggers(
@@ -97,11 +101,13 @@ final class ReminderScheduler {
     }
 
     private func run(trigger: ReminderTrigger, now: Date) async {
+        guard settings.aiPollingEnabled else { return }
         guard !isChecking else { return }
         isChecking = true
         defer { isChecking = false }
 
         let decision = await engine.decision(for: trigger, settings: settings, now: now)
+        guard settings.aiPollingEnabled else { return }
         presenter.present(decision: decision, trigger: trigger, settings: settings, timestamp: now)
     }
 

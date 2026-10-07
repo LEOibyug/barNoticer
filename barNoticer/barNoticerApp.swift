@@ -53,11 +53,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.start()
         islandController = controller
 
-        let reminders = ReminderScheduler(modelContext: modelContainer.mainContext)
+        let reminderPresenter = ReminderPresenter(modelContext: modelContainer.mainContext)
+        let reminders = ReminderScheduler(modelContext: modelContainer.mainContext, presenter: reminderPresenter)
         reminders.start()
         reminderScheduler = reminders
 
-        let assistant = AIAssistantPanelController(modelContext: modelContainer.mainContext)
+        let assistant = AIAssistantPanelController(modelContext: modelContainer.mainContext, replyPresenter: reminderPresenter)
         assistantController = assistant
 
         let todoCreation = TodoCreationPanelController(modelContext: modelContainer.mainContext)

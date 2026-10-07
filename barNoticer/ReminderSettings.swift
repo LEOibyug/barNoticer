@@ -13,6 +13,7 @@ struct ReminderSettings: Equatable {
     private static let pollingIntervalKey = "ReminderSettingsPollingInterval"
     private static let systemNotificationsEnabledKey = "ReminderSettingsSystemNotificationsEnabled"
     private static let toneKey = "ReminderSettingsTone"
+    private static let scheduledAIKey = "ReminderSettingsScheduledAIWording"
     private static let dedupeWindowKey = "ReminderSettingsDedupeWindow"
     private static let hotZoneFlashExpansionKey = "ReminderSettingsHotZoneFlashExpansion"
     private static let reminderPanelOffsetXKey = "ReminderSettingsPanelOffsetX"
@@ -22,6 +23,7 @@ struct ReminderSettings: Equatable {
     private static let reminderPanelAutoCloseDelayKey = "ReminderSettingsPanelAutoCloseDelay"
 
     var aiPollingEnabled: Bool = false
+    var scheduledAIWordingEnabled: Bool = true
     var pollingInterval: TimeInterval = 1_800
     var systemNotificationsEnabled: Bool = true
     var tone: ReminderTone = .playful
@@ -44,9 +46,11 @@ struct ReminderSettings: Equatable {
         reminderPanelOffsetY: Double = 0,
         reminderPanelWidth: Double = 392,
         reminderPanelTopContentInset: Double = Double(ReminderPresentationTiming.defaultPanelTopContentInset),
-        reminderPanelAutoCloseDelay: TimeInterval = ReminderPresentationTiming.defaultPanelAutoCloseDelay
+        reminderPanelAutoCloseDelay: TimeInterval = ReminderPresentationTiming.defaultPanelAutoCloseDelay,
+        scheduledAIWordingEnabled: Bool = true
     ) {
         self.aiPollingEnabled = aiPollingEnabled
+        self.scheduledAIWordingEnabled = scheduledAIWordingEnabled
         self.pollingInterval = pollingInterval
         self.systemNotificationsEnabled = systemNotificationsEnabled
         self.tone = tone
@@ -73,9 +77,11 @@ struct ReminderSettings: Equatable {
             reminderPanelTopContentInset: defaults.object(forKey: Self.reminderPanelTopContentInsetKey) == nil ? Double(ReminderPresentationTiming.defaultPanelTopContentInset) : max(12, defaults.double(forKey: Self.reminderPanelTopContentInsetKey)),
             reminderPanelAutoCloseDelay: defaults.object(forKey: Self.reminderPanelAutoCloseDelayKey) == nil ? ReminderPresentationTiming.defaultPanelAutoCloseDelay : min(15, max(1, defaults.double(forKey: Self.reminderPanelAutoCloseDelayKey)))
         )
+        scheduledAIWordingEnabled = defaults.object(forKey: Self.scheduledAIKey) == nil ? true : defaults.bool(forKey: Self.scheduledAIKey)
     }
 
     func save(to defaults: UserDefaults = .standard) {
+        defaults.set(scheduledAIWordingEnabled, forKey: Self.scheduledAIKey)
         defaults.set(aiPollingEnabled, forKey: Self.aiPollingEnabledKey)
         defaults.set(pollingInterval, forKey: Self.pollingIntervalKey)
         defaults.set(systemNotificationsEnabled, forKey: Self.systemNotificationsEnabledKey)

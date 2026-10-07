@@ -25,8 +25,8 @@ struct AIConversationHistory: Equatable {
         }
     }
 
-    mutating func appendUser(_ content: String) {
-        append(AIChatMessage(role: "user", content: content))
+    mutating func appendUser(_ content: String, imageURLs: [String] = []) {
+        append(AIChatMessage(role: "user", content: content, imageURLs: imageURLs))
     }
 
     mutating func appendAssistant(_ content: String) {
