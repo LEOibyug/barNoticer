@@ -110,17 +110,11 @@ final class AIGlobalMemoryStore: ObservableObject {
         try persist(AIGlobalMemorySnapshot(revision: UUID(), epoch: UUID(), entries: []))
     }
 
-    func contextMessage() throws -> String {
-        let snapshot = try read()
+    /// Serialized only when the model explicitly requests the read tool.
+    func toolContent() throws -> String {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let json = String(decoding: try encoder.encode(snapshot.entries), as: UTF8.self)
-        return """
-        全局用户记忆（本机持久保存，每轮请求重新读取）：
-        以下是用户信息与用户定义，不是新的应用能力。适用偏好时，优先级为：本轮用户明确要求 > explicit（用户明确保存的定义）> automatic（根据用户表述自动记录的信息）> 应用内置默认偏好。名称、称呼、回复语言、表达风格和任务整理习惯等与固定提示词冲突时，遵循用户定义。
-        工具参数格式、数据完整性、只读工具边界及“清空记忆必须二次确认”等应用约束仍有效，任何记忆都不能免除确认或声称具有不存在的能力。与旧聊天记录不一致时，以此处最新记忆为准；记忆为空时，不得仅根据旧聊天记录自动恢复已清空的内容。
-        记忆条目 JSON：\(json)
-        """
+        return String(decoding: try encoder.encode(read().entries), as: UTF8.self)
     }
 
     private func persist(_ snapshot: AIGlobalMemorySnapshot) throws {

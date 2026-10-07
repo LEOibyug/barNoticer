@@ -160,7 +160,7 @@ final class AITodoToolTests: XCTestCase {
     func testAssistantProgressTextReflectsToolActivity() {
         XCTAssertEqual(AIAssistantProgress.idle.displayText, "")
         XCTAssertEqual(AIAssistantProgress.thinking.displayText, "思考中...")
-        XCTAssertEqual(AIAssistantProgress.readingTodos.displayText, "阅览事项中...")
+        XCTAssertEqual(AIAssistantProgress.readingTodos.displayText, "查阅事项中...")
         XCTAssertEqual(AIAssistantProgress.preparingActions.displayText, "整理操作建议中...")
 
         XCTAssertEqual(AIAssistantProgress.progress(forToolName: "list_active_todos"), .readingTodos)

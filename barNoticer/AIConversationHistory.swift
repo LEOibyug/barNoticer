@@ -222,6 +222,14 @@ enum AIVisibleResponse {
             return "已读取未完成事项。"
         }
 
+        if toolNames.contains("save_global_memory") {
+            return "已更新全局记忆。"
+        }
+
+        if toolNames.contains("read_global_memory") {
+            return "已查阅全局记忆。"
+        }
+
         if !toolNames.isEmpty {
             return "已读取事项并完成处理。"
         }

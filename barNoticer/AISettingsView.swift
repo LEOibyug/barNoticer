@@ -127,9 +127,9 @@ struct AISettingsView: View {
     private var memorySection: some View {
         let result = Result { try memoryStore.read().entries }
         let entries = (try? result.get()) ?? []
-        return SettingsSection(title: "全局记忆", subtitle: "每轮对话都会带入，跨新对话和应用重启保留。用户定义优先于内置默认偏好，可通过对话查看或修改。") {
+        return SettingsSection(title: "全局记忆", subtitle: "由 AI 按需查阅，跨新对话和应用重启保留。用户定义优先于内置默认偏好，可通过对话查看或修改。") {
             VStack(alignment: .leading, spacing: 12) {
-                Text("记忆保存在本机，并随对话发送给你配置的 AI 服务。AI 可自动记录稳定偏好；用户明确保存的定义优先。")
+                Text("记忆保存在本机，AI 主动查阅时才发送给你配置的 AI 服务。AI 可自动记录稳定偏好；用户明确保存的定义优先。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if case let .failure(error) = result {

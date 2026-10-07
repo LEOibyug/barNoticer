@@ -173,27 +173,115 @@ final class AIGlobalMemoryTests: XCTestCase {
         XCTAssertEqual(try f.memory.read().entries.count, 2)
     }
 
-    func testEveryToolRoundAndNewConversationReceivesLatestMemory() async throws {
+    func testMemoryIsOnlySentAfterLookupAndDoesNotCarryIntoLaterTurns() async throws {
+        let f = try Fixture()
+        defer { f.cleanUp() }
+        try f.seed()
+        MemoryURLProtocol.responses = [try response(calls: [call("read_global_memory")]), Self.reply]
+        f.model.prompt = "按我的偏好回复"
+        f.model.submit()
+        for _ in 0..<150 where MemoryURLProtocol.requests.count < 2 { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(f.model.progress.displayText, "查阅记忆中...")
+        try await waitForCompletion(f.model)
+        XCTAssertEqual(f.model.state, .ready)
+        XCTAssertFalse(try requestContent(at: 0).contains("小林"))
+        let messages = try requestMessages(at: 1)
+        XCTAssertTrue(messages.contains { $0["role"] as? String == "tool" && ($0["content"] as? String)?.contains("小林") == true })
+        XCTAssertFalse(messages.contains { $0["role"] as? String == "system" && ($0["content"] as? String)?.contains("小林") == true })
+        XCTAssertFalse(f.model.conversation.messages.contains { $0.role == "tool" })
+        f.model.prompt = "接下来"
+        f.model.submit()
+        try await waitForCompletion(f.model)
+        XCTAssertFalse(try requestContent(at: 2).contains("小林"))
+        f.model.startNewConversation()
+        f.model.prompt = "你好"
+        f.model.submit()
+        try await waitForCompletion(f.model)
+        XCTAssertFalse(try requestContent(at: 3).contains("小林"))
+        XCTAssertEqual(try f.memory.read().entries.count, 1)
+    }
+
+    func testMemorySaveDoesNotInjectOtherStoredEntries() async throws {
         let f = try Fixture()
         defer { f.cleanUp() }
         try f.seed()
         MemoryURLProtocol.responses = [try response(calls: [call("save_global_memory", ["key": "语言", "content": "日文", "source": "automatic"])]), Self.reply]
         f.model.prompt = "我平时使用日文"
         f.model.submit()
+        for _ in 0..<150 where MemoryURLProtocol.requests.count < 2 { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(f.model.progress.displayText, "记录记忆中...")
         try await waitForCompletion(f.model)
-        XCTAssertEqual(f.model.state, .ready)
-        XCTAssertEqual(MemoryURLProtocol.requests.count, 2)
-        XCTAssertTrue(try memoryContent(at: 0).contains("小林"))
-        XCTAssertFalse(try memoryContent(at: 0).contains("日文"))
-        XCTAssertTrue(try memoryContent(at: 1).contains("日文"))
-        XCTAssertEqual(f.model.proposals.count, 0)
-        f.model.startNewConversation()
-        f.model.prompt = "你好"
+        XCTAssertFalse(try requestContent(at: 0).contains("小林"))
+        XCTAssertFalse(try requestContent(at: 1).contains("小林"))
+        XCTAssertEqual(try f.memory.read().entries.count, 2)
+    }
+
+    func testMemoryOnlyEmptyReplyDescribesMemoryRatherThanTodoLookup() async throws {
+        for save in [false, true] {
+            let f = try Fixture()
+            defer { f.cleanUp() }
+            let tool = save ? try call("save_global_memory", ["key": "语言", "content": "日文", "source": "automatic"]) : try call("read_global_memory")
+            MemoryURLProtocol.responses = [try response(calls: [tool]), try response(text: "")]
+            f.model.prompt = "处理记忆"
+            f.model.submit()
+            try await waitForCompletion(f.model)
+            XCTAssertEqual(f.model.response, save ? "已更新全局记忆。" : "已查阅全局记忆。")
+        }
+    }
+
+    func testRepeatedLookupReplacesEarlierFullMemoryResult() async throws {
+        let f = try Fixture()
+        defer { f.cleanUp() }
+        try f.seed()
+        MemoryURLProtocol.responses = [try response(calls: [call("read_global_memory")]), try response(calls: [call("read_global_memory")]), Self.reply]
+        f.model.prompt = "查一下偏好"
         f.model.submit()
         try await waitForCompletion(f.model)
-        XCTAssertTrue(try memoryContent(at: 2).contains("日文"))
-        let messages = try XCTUnwrap(MemoryURLProtocol.requests[2]["messages"] as? [[String: Any]])
-        XCTAssertEqual(messages.filter { $0["role"] as? String == "user" }.count, 1)
+        let messages = try requestMessages(at: 2)
+        XCTAssertEqual(messages.filter { ($0["content"] as? String)?.contains("小林") == true }.count, 1)
+        XCTAssertEqual(messages.filter { $0["role"] as? String == "tool" }.count, 2, "Keep each call paired with a tool response")
+    }
+
+    func testSavingAfterLookupExpiresOldResultAndNextLookupReadsLatestMemory() async throws {
+        let f = try Fixture()
+        defer { f.cleanUp() }
+        try f.seed()
+        MemoryURLProtocol.responses = [try response(calls: [call("read_global_memory")]),
+            try response(calls: [call("save_global_memory", ["key": "称呼", "content": "小陈", "source": "explicit"])]),
+            try response(calls: [call("read_global_memory")]), Self.reply]
+        f.model.prompt = "修改我的称呼"
+        f.model.submit()
+        try await waitForCompletion(f.model)
+        XCTAssertEqual(MemoryURLProtocol.requests.count, 4)
+        XCTAssertTrue(try requestContent(at: 1).contains("小林"))
+        XCTAssertFalse(try requestContent(at: 2).contains("小林"))
+        XCTAssertFalse(try requestContent(at: 3).contains("小林"))
+        XCTAssertTrue(try requestMessages(at: 3).contains { $0["role"] as? String == "tool" && ($0["content"] as? String)?.contains("小陈") == true })
+    }
+
+    func testBatchLookupStatusIsNotHiddenBySubsequentTaskProposal() async throws {
+        let f = try Fixture()
+        defer { f.cleanUp() }
+        try f.seed()
+        MemoryURLProtocol.responses = [try response(calls: [call("read_global_memory"), call("create_todo", ["title": "任务", "priority": "high"])]), Self.reply]
+        f.model.prompt = "按我的习惯建个任务"
+        f.model.submit()
+        for _ in 0..<150 where MemoryURLProtocol.requests.count < 2 { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(f.model.progress.displayText, "查阅记忆中...")
+        try await waitForCompletion(f.model)
+        XCTAssertEqual(f.model.proposals.count, 1)
+    }
+
+    func testTodoLookupShowsActivityInsideInput() async throws {
+        let f = try Fixture()
+        defer { f.cleanUp() }
+        MemoryURLProtocol.responses = [try response(calls: [call("list_active_todos")]), Self.reply]
+        f.model.prompt = "查一下待办"
+        f.model.submit()
+        for _ in 0..<150 where MemoryURLProtocol.requests.count < 2 { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(f.model.progress.displayText, "查阅事项中...")
+        try await waitForCompletion(f.model)
+        XCTAssertEqual(f.model.progress, .idle)
     }
 
     func testModelRequestedClearCannotBypassApprovalOrFalselyReportSuccess() async throws {
@@ -248,21 +336,64 @@ final class AIGlobalMemoryTests: XCTestCase {
         f.model.submit()
         try await waitForCompletion(f.model)
         XCTAssertEqual(f.model.state, .ready)
-        XCTAssertFalse(try memoryContent(at: 1).contains("小林"))
+        XCTAssertFalse(try requestContent(at: 1).contains("小林"))
     }
 
-    func testReminderReceivesMemoryWithoutMutationTools() async throws {
+    func testReminderOnlyReceivesMemoryAfterRequestingReadOnlyTool() async throws {
         let f = try Fixture()
         defer { f.cleanUp() }
         try f.seed()
-        MemoryURLProtocol.responses = [try response(text: #"{"should_remind":false,"message":"","todo_references":[]}"#)]
+        MemoryURLProtocol.responses = [try response(calls: [call("read_global_memory")]), try response(text: #"{"should_remind":true,"message":"小林，记得休息","todo_references":[]}"#)]
         let engine = AIReminderEngine(modelContext: f.container.mainContext, client: f.client, apiKeyStore: f.keyStore,
                                       historyStore: ReminderHistoryStore(defaults: f.defaults), defaults: f.defaults, memoryStore: f.memory)
+        let decision = await engine.decision(for: .aiPoll, settings: ReminderSettings())
+        XCTAssertTrue(decision.shouldRemind)
+        XCTAssertEqual(MemoryURLProtocol.requests.count, 2)
+        XCTAssertFalse(try requestContent(at: 0).contains("小林"))
+        guard MemoryURLProtocol.requests.count == 2 else { return }
+        XCTAssertTrue(try requestMessages(at: 1).contains { $0["role"] as? String == "tool" && ($0["content"] as? String)?.contains("小林") == true })
+        let definitions = try XCTUnwrap(MemoryURLProtocol.requests[0]["tools"] as? [[String: Any]])
+        XCTAssertEqual(definitions.compactMap { ($0["function"] as? [String: Any])?["name"] as? String }, ["read_global_memory"])
+    }
+
+    func testReminderWithoutLookupDoesNotReceiveMemory() async throws {
+        let f = try Fixture()
+        defer { f.cleanUp() }
+        try f.seed()
+        MemoryURLProtocol.responses = [try response(text: #"{"should_remind":false}"#)]
+        let engine = AIReminderEngine(modelContext: f.container.mainContext, client: f.client, apiKeyStore: f.keyStore,
+                                      defaults: f.defaults, memoryStore: f.memory)
         _ = await engine.decision(for: .aiPoll, settings: ReminderSettings())
-        let request = try XCTUnwrap(MemoryURLProtocol.requests.first)
-        let messages = try XCTUnwrap(request["messages"] as? [[String: Any]])
-        XCTAssertTrue(messages.contains { ($0["content"] as? String)?.contains("小林") == true })
-        XCTAssertTrue((request["tools"] as? [Any] ?? []).isEmpty)
+        XCTAssertEqual(MemoryURLProtocol.requests.count, 1)
+        XCTAssertFalse(try requestContent(at: 0).contains("小林"))
+    }
+
+    func testReminderCannotWriteMemoryOrModifyTodosThroughTools() async throws {
+        let f = try Fixture()
+        defer { f.cleanUp() }
+        try f.seed()
+        let before = try f.memory.read()
+        let engine = AIReminderEngine(modelContext: f.container.mainContext, client: f.client, apiKeyStore: f.keyStore,
+                                      defaults: f.defaults, memoryStore: f.memory)
+        for tool in [try call("save_global_memory", ["key": "称呼", "content": "别人", "source": "explicit"]), try call("clear_global_memory"), try call("create_todo", ["title": "不该创建", "priority": "high"])] {
+            MemoryURLProtocol.responses = [try response(calls: [tool])]
+            let decision = await engine.decision(for: .aiPoll, settings: ReminderSettings())
+            XCTAssertFalse(decision.shouldRemind)
+            XCTAssertEqual(try f.memory.read(), before)
+            XCTAssertEqual(try f.container.mainContext.fetchCount(FetchDescriptor<TodoItem>()), 0)
+        }
+    }
+
+    func testReminderLookupLoopIsBoundedAndFallsBack() async throws {
+        let f = try Fixture()
+        defer { f.cleanUp() }
+        MemoryURLProtocol.responses = [try response(calls: [call("read_global_memory")]), try response(calls: [call("read_global_memory")])]
+        let engine = AIReminderEngine(modelContext: f.container.mainContext, client: f.client, apiKeyStore: f.keyStore,
+                                      defaults: f.defaults, memoryStore: f.memory)
+        let decision = await engine.decision(for: .aiPoll, settings: ReminderSettings())
+        XCTAssertFalse(decision.shouldRemind)
+        XCTAssertEqual(MemoryURLProtocol.requests.count, 2)
+        XCTAssertTrue((MemoryURLProtocol.requests[1]["tools"] as? [Any] ?? []).isEmpty)
     }
 
     func testPendingTaskDoesNotSwallowLaterMemoryToolCall() async throws {
@@ -357,11 +488,12 @@ final class AIGlobalMemoryTests: XCTestCase {
         XCTAssertNil(f.model.memoryClearConfirmation)
     }
 
-    private func memoryContent(at index: Int) throws -> String {
-        let messages = try XCTUnwrap(MemoryURLProtocol.requests[index]["messages"] as? [[String: Any]])
-        let memoryMessages = messages.filter { ($0["content"] as? String)?.hasPrefix("全局用户记忆") == true }
-        XCTAssertEqual(memoryMessages.count, 1)
-        return try XCTUnwrap(memoryMessages.first?["content"] as? String)
+    private func requestMessages(at index: Int) throws -> [[String: Any]] {
+        try XCTUnwrap(MemoryURLProtocol.requests[index]["messages"] as? [[String: Any]])
+    }
+
+    private func requestContent(at index: Int) throws -> String {
+        try requestMessages(at: index).compactMap { $0["content"] as? String }.joined(separator: "\n")
     }
 
     private func call(_ name: String, _ args: [String: Any] = [:]) throws -> AIToolCall {

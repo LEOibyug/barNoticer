@@ -45,13 +45,9 @@ final class AIReminderEngine {
             let aiSettings = AISettings(defaults: defaults)
             let apiKey = apiKeyStore.readAPIKey()
             let revision = try memoryStore.read().revision
-            let messages = AIReminderPromptBuilder.messages(context: context, trigger: trigger, memoryContext: try memoryStore.contextMessage())
+            let messages = AIReminderPromptBuilder.messages(context: context, trigger: trigger)
             logReminderChat(role: "Prompt", content: messages.compactMap(\.content).joined(separator: "\n"))
-            let result = try await client.sendReadOnly(
-                messages: messages,
-                settings: aiSettings,
-                apiKey: apiKey
-            )
+            let result = try await resultWithOptionalMemoryLookup(messages: messages, settings: aiSettings, apiKey: apiKey, revision: revision)
             try Task.checkCancellation()
             guard try memoryStore.read().revision == revision else { throw AIGlobalMemoryError.changedDuringRequest }
             logReminderChat(role: "Assistant", content: result.content)
@@ -84,6 +80,27 @@ final class AIReminderEngine {
         }
     }
 
+    private func resultWithOptionalMemoryLookup(messages: [AIChatMessage], settings: AISettings, apiKey: String, revision: UUID) async throws -> AIChatResult {
+        var messages = messages
+        // At most one lookup round. Delivery can always fall back to local wording.
+        for round in 0..<2 {
+            let result = try await client.sendReadOnly(messages: messages, settings: settings, apiKey: apiKey, allowsMemoryLookup: round == 0)
+            try Task.checkCancellation()
+            guard try memoryStore.read().revision == revision else { throw AIGlobalMemoryError.changedDuringRequest }
+            if result.toolCalls.isEmpty { return result }
+            guard round == 0, result.toolCalls.allSatisfy({ $0.function.name == "read_global_memory" }) else {
+                throw AIClientError.invalidResponse
+            }
+            messages.append(AIChatMessage(role: "assistant", content: result.content,
+                                          reasoningContent: result.reasoningContent, toolCalls: result.toolCalls))
+            let content = try memoryStore.toolContent()
+            for call in result.toolCalls {
+                messages.append(AIChatMessage(role: "tool", content: content, toolCallID: call.id))
+            }
+        }
+        throw AIClientError.invalidResponse
+    }
+
     private func fallbackDecision(for todoID: UUID) -> ReminderDecision? {
         guard let item = (try? modelContext.fetch(FetchDescriptor<TodoItem>()))?.first(where: { $0.id == todoID }) else {
             return nil
@@ -106,18 +123,19 @@ final class AIReminderEngine {
 }
 
 enum AIReminderPromptBuilder {
-    static func messages(context: ReminderContext, trigger: ReminderTrigger, memoryContext: String? = nil) -> [AIChatMessage] {
+    static func messages(context: ReminderContext, trigger: ReminderTrigger) -> [AIChatMessage] {
         [
-            AIChatMessage(role: "system", content: systemPrompt(tone: context.tone))
-        ] + (memoryContext.map { [AIChatMessage(role: "system", content: $0)] } ?? [])
-            + [AIChatMessage(role: "user", content: userContext(context: context, trigger: trigger))]
+            AIChatMessage(role: "system", content: systemPrompt(tone: context.tone)),
+            AIChatMessage(role: "user", content: userContext(context: context, trigger: trigger))
+        ]
     }
 
     private static func systemPrompt(tone: ReminderTone) -> String {
         """
         你是 barNoticer 的提醒判断器，只能决定是否提醒和生成提醒文案。
-        你不能创建、修改、删除或完成事项，不能调用工具，也不能要求用户确认操作。
-        输出必须是 JSON 对象，不要使用 Markdown，不要输出 JSON 以外的内容。
+        你不能创建、修改、删除或完成事项，也不能要求用户确认操作。只允许按需调用 read_global_memory 查阅用户偏好，不能保存、清空记忆或调用其他工具。
+        \(AISystemPrompt.memoryLookupGuidance)
+        最终输出必须是 JSON 对象，不要使用 Markdown，不要输出 JSON 以外的内容。
         格式：{"should_remind":true,"message":"提醒文案，可包含 [[todo:<UUID>]] 引用","todo_references":["UUID"],"snooze_minutes":30}
         如果不需要提醒，输出 {"should_remind":false,"message":"","todo_references":[]}
         文案风格：\(tone.promptDescription)
@@ -245,12 +263,12 @@ enum ReminderDeadlinePolicy {
 }
 
 private extension AIClient {
-    func sendReadOnly(messages: [AIChatMessage], settings: AISettings, apiKey: String) async throws -> AIChatResult {
+    func sendReadOnly(messages: [AIChatMessage], settings: AISettings, apiKey: String, allowsMemoryLookup: Bool) async throws -> AIChatResult {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AIClientError.missingAPIKey
         }
         guard settings.isValid else { throw AIClientError.invalidSettings }
-        var request = try AIChatRequestBuilder.make(messages: messages, settings: settings, apiKey: apiKey, tools: [])
+        var request = try AIChatRequestBuilder.make(messages: messages, settings: settings, apiKey: apiKey, tools: allowsMemoryLookup ? [AIToolSchema.readGlobalMemoryTool] : [])
         request.timeoutInterval = 10
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -261,7 +279,7 @@ private extension AIClient {
         }
         let decoded = try JSONDecoder().decode(AIReadOnlyChatResponse.self, from: data)
         guard let message = decoded.choices.first?.message else { throw AIClientError.invalidResponse }
-        return AIChatResult(content: message.content ?? "", reasoningContent: message.reasoningContent, toolCalls: [])
+        return AIChatResult(content: message.content ?? "", reasoningContent: message.reasoningContent, toolCalls: message.toolCalls ?? [])
     }
 }
 
@@ -270,10 +288,12 @@ private struct AIReadOnlyChatResponse: Decodable {
         struct Message: Decodable {
             var content: String?
             var reasoningContent: String?
+            var toolCalls: [AIToolCall]?
 
             enum CodingKeys: String, CodingKey {
                 case content
                 case reasoningContent = "reasoning_content"
+                case toolCalls = "tool_calls"
             }
         }
 

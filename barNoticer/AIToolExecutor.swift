@@ -33,7 +33,7 @@ final class AIToolExecutor {
 
         switch toolCall.function.name {
         case "read_global_memory":
-            return .context(Self.encode(try memoryStore.read().entries))
+            return .context(try memoryStore.toolContent())
         case "save_global_memory":
             guard let source = AIGlobalMemoryEntry.Source(rawValue: try arguments.string("source")) else {
                 throw AIToolExecutorError.invalidArguments

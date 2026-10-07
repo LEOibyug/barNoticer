@@ -290,16 +290,21 @@ final class AIAssistantModel: ObservableObject {
             var messages = AIAssistantRequestBuilder.makeMessages(
                 systemPrompt: AISystemPrompt.text,
                 inlineContext: makeInlineContext(),
-                conversation: conversation,
-                memoryContext: try memoryStore.contextMessage()
+                conversation: conversation
             )
 
+            var readMemoryRevision: UUID?
             var handledToolNames: [String] = []
             var handledProposalCount = 0
             var visibleResponse = ""
 
             for _ in 0..<maxToolRounds {
-                try refreshMemoryContext(in: &messages, expectedEpoch: memoryEpoch)
+                let memory = try memoryStore.read()
+                guard memory.epoch == memoryEpoch else { throw AIGlobalMemoryError.clearedDuringRequest }
+                if let revision = readMemoryRevision, revision != memory.revision {
+                    expireMemoryReadResults(in: &messages)
+                    readMemoryRevision = nil
+                }
                 let result = try await client.send(messages: messages, settings: settings, apiKey: apiKey)
                 try Task.checkCancellation()
                 guard try memoryStore.read().epoch == memoryEpoch else { throw AIGlobalMemoryError.clearedDuringRequest }
@@ -322,12 +327,19 @@ final class AIAssistantModel: ObservableObject {
                     toolCalls: result.toolCalls
                 ))
 
+                // Keep lookup activity visible through the following network request,
+                // even if this response contains other, instantaneous tool operations.
+                progress = AIAssistantProgress.progress(forToolNames: result.toolCalls.map { $0.function.name })
                 var pendingProposals: [AIActionProposal] = []
                 for call in result.toolCalls {
                     handledToolNames.append(call.function.name)
-                    progress = AIAssistantProgress.progress(forToolName: call.function.name)
                     log(.debug, "AI tool requested", metadata: ["tool": call.function.name])
+                    if call.function.name == "read_global_memory" || call.function.name == "save_global_memory" {
+                        expireMemoryReadResults(in: &messages)
+                        readMemoryRevision = nil
+                    }
                     let toolResult = try executor.handle(call)
+                    if call.function.name == "read_global_memory" { readMemoryRevision = try memoryStore.read().revision }
                     switch toolResult {
                     case let .context(content):
                         messages.append(AIChatMessage(role: "tool", content: content, toolCallID: call.id))
@@ -390,9 +402,14 @@ final class AIAssistantModel: ObservableObject {
         }
     }
 
-    private func refreshMemoryContext(in messages: inout [AIChatMessage], expectedEpoch: UUID) throws {
-        guard try memoryStore.read().epoch == expectedEpoch else { throw AIGlobalMemoryError.clearedDuringRequest }
-        messages[AIAssistantRequestBuilder.memoryMessageIndex] = AIChatMessage(role: "system", content: try memoryStore.contextMessage())
+    private func expireMemoryReadResults(in messages: inout [AIChatMessage]) {
+        let readIDs = Set(messages.flatMap { $0.toolCalls ?? [] }
+            .filter { $0.function.name == "read_global_memory" }.map(\.id))
+        for index in messages.indices where messages[index].role == "tool" {
+            if let id = messages[index].toolCallID, readIDs.contains(id) {
+                messages[index].content = "此查阅结果已过期或被更新的查阅替代；需要时请再次调用 read_global_memory。"
+            }
+        }
     }
 
     private func publishCompletedReply() {
@@ -507,16 +524,14 @@ struct AIReferencedTodo: Equatable, Identifiable {
 }
 
 enum AIAssistantRequestBuilder {
-    static let memoryMessageIndex = 2
     static func makeMessages(
         systemPrompt: String,
         inlineContext: AITodoInlineContext,
-        conversation: AIConversationHistory,
-        memoryContext: String? = nil
+        conversation: AIConversationHistory
     ) -> [AIChatMessage] {
         [
             AIChatMessage(role: "system", content: systemPrompt),
             AIChatMessage(role: "system", content: inlineContext.content)
-        ] + (memoryContext.map { [AIChatMessage(role: "system", content: $0)] } ?? []) + conversation.messages
+        ] + conversation.messages
     }
 }

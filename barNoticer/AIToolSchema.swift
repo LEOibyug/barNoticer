@@ -50,8 +50,9 @@ enum JSONValue: Codable, Equatable {
 }
 
 enum AIToolSchema {
+    static let readGlobalMemoryTool = tool(name: "read_global_memory", description: "按需查阅长期用户记忆。上下文不会预先提供记忆；需要用户信息、偏好、习惯、已有定义，或用户询问记住了什么、要求修改记忆时主动调用。返回 key、content、source 和更新时间；不必每轮固定查阅。")
     static let openAICompatibleTools: [AIToolDefinition] = [
-        tool(name: "read_global_memory", description: "读取全部持久化全局用户记忆，可在用户询问记住了什么时使用。"),
+        readGlobalMemoryTool,
         tool(
             name: "save_global_memory",
             description: "按 key 新增或更新一条全局记忆，立即保存，跨会话生效。自动记录仅限用户本人表述的稳定信息或偏好；用户明确要求记住或修改时使用 explicit。同一主题复用原 key，避免冲突和重复；不能用空内容删除或清空。",
