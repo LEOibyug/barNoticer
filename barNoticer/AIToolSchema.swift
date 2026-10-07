@@ -51,6 +51,17 @@ enum JSONValue: Codable, Equatable {
 
 enum AIToolSchema {
     static let openAICompatibleTools: [AIToolDefinition] = [
+        tool(name: "read_global_memory", description: "读取全部持久化全局用户记忆，可在用户询问记住了什么时使用。"),
+        tool(
+            name: "save_global_memory",
+            description: "按 key 新增或更新一条全局记忆，立即保存，跨会话生效。自动记录仅限用户本人表述的稳定信息或偏好；用户明确要求记住或修改时使用 explicit。同一主题复用原 key，避免冲突和重复；不能用空内容删除或清空。",
+            properties: [
+                "key": .object(["type": .string("string"), "description": .string("稳定的主题名称，1～64 字，例如：称呼、回复语言、任务命名习惯。")]),
+                "content": .object(["type": .string("string"), "description": .string("简洁、明确的用户信息或用户定义，1～1000 字。")]),
+                "source": .object(["type": .string("string"), "enum": .array([.string("explicit"), .string("automatic")]), "description": .string("explicit=用户明确要求保存或修改；automatic=依据用户本人表述自动记录。")])
+            ], required: ["key", "content", "source"]
+        ),
+        tool(name: "clear_global_memory", description: "仅在用户明确要求清空全部全局记忆时提出清空请求。此调用不会清空；应用必须弹出二次确认，即使关闭普通操作审批也不能绕过。不得声称已清空，等待用户在应用中确认。"),
         tool(
             name: "list_active_todos",
             description: "读取当前未完成事项，按自定义分组返回，每条包含重要性、可选截止时间、多个时间点或重复计划。"

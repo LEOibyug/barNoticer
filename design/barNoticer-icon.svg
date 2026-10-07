@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" role="img" aria-labelledby="title description">
+  <title id="title">barNoticer 应用图标</title>
+  <desc id="description">薄荷绿圆角底板，顶部刘海与展开的深色任务岛。明亮的勾选符号和两条任务线代表待办管理。</desc>
+  <defs>
+    <linearGradient id="tile" x1="224" y1="80" x2="816" y2="956" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E4FFF0"/>
+      <stop offset="0.5" stop-color="#B9F2D6"/>
+      <stop offset="1" stop-color="#70CBAE"/>
+    </linearGradient>
+    <linearGradient id="island" x1="340" y1="286" x2="628" y2="746" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#283F3C"/>
+      <stop offset="1" stop-color="#101D20"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="512" y1="292" x2="512" y2="732" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity="0.36"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.04"/>
+    </linearGradient>
+    <linearGradient id="check" x1="258" y1="444" x2="443" y2="588" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D9FFE9"/>
+      <stop offset="1" stop-color="#79E8BC"/>
+    </linearGradient>
+    <filter id="tileShadow" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="16" stdDeviation="16" flood-color="#102C26" flood-opacity="0.16"/>
+    </filter>
+    <filter id="islandShadow" x="64" y="232" width="896" height="616" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="30" stdDeviation="27" flood-color="#173F34" flood-opacity="0.30"/>
+    </filter>
+  </defs>
+
+  <!-- The inset tile leaves a transparent margin suitable for a macOS app icon. -->
+  <g id="background" filter="url(#tileShadow)">
+    <rect x="64" y="64" width="896" height="896" rx="204" fill="url(#tile)"/>
+    <rect x="66" y="66" width="892" height="892" rx="202" stroke="#FFFFFF" stroke-opacity="0.55" stroke-width="4"/>
+  </g>
+
+  <!-- A short notch anchors the mark to the top edge, as the application does. -->
+  <path id="notch" d="M354 64H670V124C670 165 637 198 596 198H428C387 198 354 165 354 124V64Z" fill="#172C2B"/>
+
+  <!-- The expanded island is the dominant silhouette. -->
+  <g id="task-island" filter="url(#islandShadow)">
+    <rect x="144" y="294" width="736" height="438" rx="142" fill="url(#island)"/>
+    <rect x="146" y="296" width="732" height="434" rx="140" stroke="url(#edge)" stroke-width="4"/>
+  </g>
+
+  <g id="task-content" stroke-linecap="round" stroke-linejoin="round">
+    <path id="completion-check" d="M252 516L324 587L446 449" stroke="url(#check)" stroke-width="54"/>
+    <path id="task-title" d="M544 470H758" stroke="#E7F6EE" stroke-width="34"/>
+    <path id="task-detail" d="M544 558H698" stroke="#7E9F92" stroke-width="28"/>
+  </g>
+
+  <!-- A quiet notification indicator echoes the application's reminder glow. -->
+  <rect id="notification-indicator" x="466" y="818" width="92" height="14" rx="7" fill="#246D58" fill-opacity="0.50"/>
+</svg>

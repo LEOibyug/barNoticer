@@ -213,6 +213,15 @@ struct AIAssistantPanelView: View {
         .onExitCommand {
             close()
         }
+        .alert("清空全部全局记忆？", isPresented: Binding(
+            get: { model.memoryClearConfirmation != nil },
+            set: { if !$0 { model.hideMemoryClearConfirmation() } }
+        ), presenting: model.memoryClearConfirmation) { request in
+            Button("取消", role: .cancel) { model.cancelMemoryClearConfirmation() }
+            Button("确认清空", role: .destructive) { model.confirmMemoryClear(request) }
+        } message: { request in
+            Text("将永久删除 \(request.entryCount) 条全局记忆，无法撤销。待办和当前聊天记录会保留。此操作始终需要确认。")
+        }
     }
 
     private func focusInput() {
@@ -328,7 +337,7 @@ private struct AIProposalRow: View {
             .padding(.vertical, 8)
             .background(.white.opacity(0.16), in: Capsule())
 
-            Button("执行") {
+            Button(proposal.requiresMandatoryConfirmation ? "清空记忆…" : "执行") {
                 model.apply(proposal)
             }
             .disabled(model.state == .loading)
@@ -344,6 +353,8 @@ private struct AIProposalRow: View {
 
     private var proposalTitle: String {
         switch proposal {
+        case .clearGlobalMemory:
+            return "清空全局记忆"
         case .completeTodo:
             return "完成事项"
         case .deleteTodo:

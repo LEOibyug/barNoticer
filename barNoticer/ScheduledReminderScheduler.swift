@@ -20,6 +20,7 @@ final class ScheduledReminderScheduler {
     private var preparation: Task<Void, Never>?
     private var preparationID: UUID?
     private var isStarted = false
+    private var preparedMemoryRevision: UUID?
 
     init(modelContext: ModelContext, presenter: any ReminderPresenting, engine: AIReminderEngine, defaults: UserDefaults = .standard) {
         self.modelContext = modelContext
@@ -36,7 +37,7 @@ final class ScheduledReminderScheduler {
     func start() {
         guard !isStarted else { return }
         isStarted = true
-        for name in [ModelContext.didSave, ReminderSettings.didChangeNotification] {
+        for name in [ModelContext.didSave, ReminderSettings.didChangeNotification, AIGlobalMemoryStore.didChangeNotification] {
             NotificationCenter.default.publisher(for: name).sink { [weak self] _ in
                 Task { @MainActor [weak self] in self?.refresh() }
             }.store(in: &observations)
@@ -49,11 +50,13 @@ final class ScheduledReminderScheduler {
 
     func refresh(now: Date = Date()) {
         let settings = ReminderSettings(defaults: defaults)
-        if !settings.scheduledAIWordingEnabled {
+        let revision = engine.memoryRevision
+        if !settings.scheduledAIWordingEnabled || revision != preparedMemoryRevision {
             preparation?.cancel()
             preparation = nil
             preparationID = nil
             preparedMessages = [:]
+            preparedMemoryRevision = revision
         }
         guard let items = try? modelContext.fetch(FetchDescriptor<TodoItem>()) else {
             installTimer(at: now.addingTimeInterval(30))
@@ -93,7 +96,9 @@ final class ScheduledReminderScheduler {
             preparation = Task { [weak self, engine] in
                 let decision = await engine.decision(for: reminder.trigger, settings: settings, now: now)
                 guard let self, !Task.isCancelled, self.preparationID == id else { return }
-                self.preparedMessages[cacheKey] = decision
+                if self.engine.memoryRevision == revision {
+                    self.preparedMessages[cacheKey] = decision
+                }
                 self.preparation = nil
                 self.preparationID = nil
                 self.refresh()

@@ -23,6 +23,7 @@ final class AIAssistantModel: ObservableObject {
     @Published var prompt = ""
     @Published private(set) var sessionID = UUID()
     let completedReplies = PassthroughSubject<AIAssistantReply, Never>()
+    @Published private(set) var memoryClearConfirmation: AIGlobalMemoryClearRequest?
     @Published var isComposingPromptText = false
     @Published private(set) var images: [AIImageAttachment] = []
     @Published private(set) var imageInputError: String?
@@ -38,6 +39,9 @@ final class AIAssistantModel: ObservableObject {
     @Published private(set) var todoReferenceRefreshID = UUID()
 
     private let modelContext: ModelContext
+    private let memoryStore: AIGlobalMemoryStore
+    private var memoryClearProposalID: UUID?
+    private var memoryClearRequestID: UUID?
     private let client: AIClient
     private let apiKeyStore: AIAPIKeyStore
     private let defaults: UserDefaults
@@ -50,9 +54,11 @@ final class AIAssistantModel: ObservableObject {
         client: AIClient? = nil,
         apiKeyStore: AIAPIKeyStore? = nil,
         defaults: UserDefaults = .standard,
-        logStore: AppDebugLogStore? = nil
+        logStore: AppDebugLogStore? = nil,
+        memoryStore: AIGlobalMemoryStore? = nil
     ) {
         self.modelContext = modelContext
+        self.memoryStore = memoryStore ?? AIGlobalMemoryStore(defaults: defaults)
         self.client = client ?? AIClient()
         self.apiKeyStore = apiKeyStore ?? .shared
         self.defaults = defaults
@@ -61,7 +67,7 @@ final class AIAssistantModel: ObservableObject {
 
     var canSubmit: Bool {
         (!prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty)
-            && state != .loading && !isComposingPromptText
+            && state != .loading && !isComposingPromptText && memoryClearConfirmation == nil
     }
 
     func addImages(_ attachments: [AIImageAttachment]) {
@@ -129,6 +135,7 @@ final class AIAssistantModel: ObservableObject {
 
     func submit() {
         guard canSubmit else { return }
+        cancelMemoryClearConfirmation()
         let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let attachments = images
         let previousConversation = conversation
@@ -153,6 +160,10 @@ final class AIAssistantModel: ObservableObject {
 
     func apply(_ proposal: AIActionProposal) {
         guard state != .loading else { return }
+        if proposal.requiresMandatoryConfirmation {
+            requestMemoryClearConfirmation(for: proposal)
+            return
+        }
         do {
             try applyConfirmed(proposal)
             proposals.removeAll { $0.id == proposal.id && $0.summary == proposal.summary }
@@ -165,10 +176,13 @@ final class AIAssistantModel: ObservableObject {
     func applyAllProposals() {
         guard state != .loading else { return }
         do {
-            for proposal in proposals {
+            for proposal in proposals where !proposal.requiresMandatoryConfirmation {
                 try applyConfirmed(proposal)
+                proposals.removeAll { $0 == proposal }
             }
-            proposals = []
+            if let clear = proposals.first(where: \.requiresMandatoryConfirmation) {
+                requestMemoryClearConfirmation(for: clear)
+            }
             todoReferenceRefreshID = UUID()
         } catch {
             state = .failed(error.localizedDescription)
@@ -182,10 +196,10 @@ final class AIAssistantModel: ObservableObject {
         }
 
         do {
-            for proposal in proposals {
+            self.proposals = proposals.filter(\.requiresMandatoryConfirmation)
+            for proposal in proposals where !proposal.requiresMandatoryConfirmation {
                 _ = try applyConfirmed(proposal)
             }
-            self.proposals = []
             todoReferenceRefreshID = UUID()
         } catch {
             state = .failed(error.localizedDescription)
@@ -193,14 +207,17 @@ final class AIAssistantModel: ObservableObject {
     }
 
     func dismiss(_ proposal: AIActionProposal) {
+        if proposal.id == memoryClearProposalID { cancelMemoryClearConfirmation() }
         proposals.removeAll { $0.id == proposal.id && $0.summary == proposal.summary }
     }
 
     func dismissAllProposals() {
+        cancelMemoryClearConfirmation()
         proposals = []
     }
 
     func startNewConversation() {
+        cancelMemoryClearConfirmation()
         requestTask?.cancel()
         requestTask = nil
         sessionID = UUID()
@@ -221,17 +238,60 @@ final class AIAssistantModel: ObservableObject {
         focusRequestID = UUID()
     }
 
+    private func requestMemoryClearConfirmation(for proposal: AIActionProposal) {
+        guard proposals.contains(proposal), case let .clearGlobalMemory(id, revision) = proposal else { return }
+        do {
+            memoryClearConfirmation = try memoryStore.requestClear(expectedRevision: revision)
+            memoryClearProposalID = id
+            memoryClearRequestID = memoryClearConfirmation?.id
+        } catch {
+            state = .failed(error.localizedDescription)
+        }
+    }
+
+    func hideMemoryClearConfirmation() {
+        // SwiftUI may dismiss the alert before invoking its chosen button.
+        memoryClearConfirmation = nil
+    }
+
+    func cancelMemoryClearConfirmation() {
+        memoryClearConfirmation = nil
+        memoryClearProposalID = nil
+        memoryClearRequestID = nil
+    }
+
+    func confirmMemoryClear(_ request: AIGlobalMemoryClearRequest) {
+        guard state != .loading, request.id == memoryClearRequestID, let id = memoryClearProposalID,
+              proposals.contains(where: {
+                  if case let .clearGlobalMemory(proposalID, revision) = $0 { return proposalID == id && revision == request.revision }
+                  return false
+              }) else { return }
+        defer { cancelMemoryClearConfirmation() }
+        do {
+            try memoryStore.confirmClear(request)
+            proposals.removeAll(where: \.requiresMandatoryConfirmation)
+            response = "已清空全部全局记忆。"
+            conversation.appendAssistant(response)
+            state = .ready
+            syncConversationState()
+        } catch {
+            state = .failed(error.localizedDescription)
+        }
+    }
+
     private func run(prompt: String, images: [AIImageAttachment], previousConversation: AIConversationHistory) async {
         var hasAppliedActions = false
         do {
             try Task.checkCancellation()
             let settings = AISettings(defaults: defaults)
+            let memoryEpoch = try memoryStore.read().epoch
             let apiKey = apiKeyStore.readAPIKey()
-            let executor = AIToolExecutor(modelContext: modelContext)
+            let executor = AIToolExecutor(modelContext: modelContext, memoryStore: memoryStore)
             var messages = AIAssistantRequestBuilder.makeMessages(
                 systemPrompt: AISystemPrompt.text,
                 inlineContext: makeInlineContext(),
-                conversation: conversation
+                conversation: conversation,
+                memoryContext: try memoryStore.contextMessage()
             )
 
             var handledToolNames: [String] = []
@@ -239,8 +299,10 @@ final class AIAssistantModel: ObservableObject {
             var visibleResponse = ""
 
             for _ in 0..<maxToolRounds {
+                try refreshMemoryContext(in: &messages, expectedEpoch: memoryEpoch)
                 let result = try await client.send(messages: messages, settings: settings, apiKey: apiKey)
                 try Task.checkCancellation()
+                guard try memoryStore.read().epoch == memoryEpoch else { throw AIGlobalMemoryError.clearedDuringRequest }
                 let sanitized = AIVisibleResponse.sanitized(result.content)
 
                 guard !result.toolCalls.isEmpty else {
@@ -269,11 +331,14 @@ final class AIAssistantModel: ObservableObject {
                     switch toolResult {
                     case let .context(content):
                         messages.append(AIChatMessage(role: "tool", content: content, toolCallID: call.id))
+                    case let .memoryUpdated(content):
+                        hasAppliedActions = true
+                        messages.append(AIChatMessage(role: "tool", content: content, toolCallID: call.id))
                     case let .proposal(proposal):
                         handledProposalCount += 1
-                        pendingProposals.append(proposal)
                         let toolMessage: String
-                        if settings.requiresActionConfirmation {
+                        if settings.requiresActionConfirmation || proposal.requiresMandatoryConfirmation {
+                            pendingProposals.append(proposal)
                             toolMessage = "已创建待确认操作：\(proposal.summary)"
                         } else {
                             toolMessage = try executor.apply(proposal).toolMessage
@@ -283,25 +348,17 @@ final class AIAssistantModel: ObservableObject {
                     }
                 }
 
-                if settings.requiresActionConfirmation, !pendingProposals.isEmpty {
-                    stageOrApply(pendingProposals, settings: settings)
-                    let final = try await client.send(messages: messages, settings: settings, apiKey: apiKey)
-                    try Task.checkCancellation()
-                    let visibleFinal = AIVisibleResponse.sanitized(final.content)
-                    visibleResponse = visibleFinal.isEmpty
-                        ? (sanitized.isEmpty ? AIVisibleResponse.fallbackText(toolNames: handledToolNames, proposalCount: handledProposalCount) : sanitized)
-                        : visibleFinal
-                    break
-                }
+                // Pending task approvals must not swallow subsequent memory/read tool calls.
+                proposals.append(contentsOf: pendingProposals)
+                if hasAppliedActions { todoReferenceRefreshID = UUID() }
 
-                if !settings.requiresActionConfirmation {
-                    proposals = []
-                    todoReferenceRefreshID = UUID()
-                }
             }
 
             if visibleResponse.isEmpty {
                 visibleResponse = AIVisibleResponse.fallbackText(toolNames: handledToolNames, proposalCount: handledProposalCount)
+            }
+            if proposals.contains(where: \.requiresMandatoryConfirmation) {
+                visibleResponse = "清空全部全局记忆需要二次确认，目前尚未清空。请点击待确认操作继续。"
             }
 
             response = visibleResponse
@@ -315,7 +372,7 @@ final class AIAssistantModel: ObservableObject {
         } catch {
             guard !Task.isCancelled else { return }
             if hasAppliedActions {
-                response = "部分操作已执行，但后续 AI 请求失败。请先检查事项列表，避免重复提交。"
+                response = "部分操作已执行，但后续 AI 请求失败。请先检查事项或记忆中的结果，避免重复提交。"
                 conversation.appendAssistant(response)
             } else if !proposals.isEmpty {
                 response = "操作已准备好，但后续 AI 请求失败。你仍可以确认或忽略这些操作。"
@@ -331,6 +388,11 @@ final class AIAssistantModel: ObservableObject {
             log(.error, "AI request failed", metadata: ["error": error.localizedDescription])
             publishCompletedReply()
         }
+    }
+
+    private func refreshMemoryContext(in messages: inout [AIChatMessage], expectedEpoch: UUID) throws {
+        guard try memoryStore.read().epoch == expectedEpoch else { throw AIGlobalMemoryError.clearedDuringRequest }
+        messages[AIAssistantRequestBuilder.memoryMessageIndex] = AIChatMessage(role: "system", content: try memoryStore.contextMessage())
     }
 
     private func publishCompletedReply() {
@@ -396,7 +458,7 @@ final class AIAssistantModel: ObservableObject {
     }
 
     private func applyConfirmed(_ proposal: AIActionProposal) throws {
-        _ = try AIToolExecutor(modelContext: modelContext).apply(proposal)
+        _ = try AIToolExecutor(modelContext: modelContext, memoryStore: memoryStore).apply(proposal)
     }
 
     private func log(_ level: AppDebugLogStore.Level, _ message: String, metadata: [String: String] = [:]) {
@@ -445,14 +507,16 @@ struct AIReferencedTodo: Equatable, Identifiable {
 }
 
 enum AIAssistantRequestBuilder {
+    static let memoryMessageIndex = 2
     static func makeMessages(
         systemPrompt: String,
         inlineContext: AITodoInlineContext,
-        conversation: AIConversationHistory
+        conversation: AIConversationHistory,
+        memoryContext: String? = nil
     ) -> [AIChatMessage] {
         [
             AIChatMessage(role: "system", content: systemPrompt),
             AIChatMessage(role: "system", content: inlineContext.content)
-        ] + conversation.messages
+        ] + (memoryContext.map { [AIChatMessage(role: "system", content: $0)] } ?? []) + conversation.messages
     }
 }

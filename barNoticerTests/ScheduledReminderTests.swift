@@ -154,6 +154,24 @@ final class ScheduledReminderTests: XCTestCase {
         XCTAssertEqual(ScheduledWordingURLProtocol.requestCount, 1)
     }
 
+    func testChangingMemoryInvalidatesPreparedReminderWording() async throws {
+        let fixture = try Fixture(aiWording: true)
+        defer { fixture.cleanUp() }
+        let memory = AIGlobalMemoryStore(defaults: fixture.defaults)
+        try memory.save(key: "称呼", content: "小王", source: .explicit)
+        ScheduledWordingURLProtocol.responseBody = #"{"choices":[{"message":{"content":"{\"should_remind\":true,\"message\":\"小王，交作业啦\"}"}}]}"#
+        let deadline = Date().addingTimeInterval(60)
+        let item = TodoItem(title: "作业", deadlineAt: deadline, reminderMinutesBefore: 0)
+        fixture.container.mainContext.insert(item)
+        fixture.scheduler.refresh()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(ScheduledWordingURLProtocol.requestCount, 1)
+        try memory.confirmClear(memory.requestClear())
+        fixture.scheduler.refresh(now: deadline)
+        XCTAssertEqual(fixture.presenter.deliveries.count, 1)
+        XCTAssertFalse(fixture.presenter.deliveries[0].message.contains("小王"))
+    }
+
     func testSavingEarlierDeadlineRearmsLiveTimerWithoutWaitingForScan() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }

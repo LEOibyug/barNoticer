@@ -9,6 +9,7 @@ final class AIReminderEngine {
     private let historyStore: ReminderHistoryStore
     private let logStore: AppDebugLogStore
     private let defaults: UserDefaults
+    private let memoryStore: AIGlobalMemoryStore
 
     init(
         modelContext: ModelContext,
@@ -16,7 +17,8 @@ final class AIReminderEngine {
         apiKeyStore: AIAPIKeyStore = .shared,
         historyStore: ReminderHistoryStore = ReminderHistoryStore(),
         logStore: AppDebugLogStore = .shared,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        memoryStore: AIGlobalMemoryStore? = nil
     ) {
         self.modelContext = modelContext
         self.client = client
@@ -24,7 +26,10 @@ final class AIReminderEngine {
         self.historyStore = historyStore
         self.logStore = logStore
         self.defaults = defaults
+        self.memoryStore = memoryStore ?? AIGlobalMemoryStore(defaults: defaults)
     }
+
+    var memoryRevision: UUID? { try? memoryStore.read().revision }
 
     func decision(for trigger: ReminderTrigger, settings: ReminderSettings, now: Date = Date()) async -> ReminderDecision {
         do {
@@ -39,13 +44,16 @@ final class AIReminderEngine {
             )
             let aiSettings = AISettings(defaults: defaults)
             let apiKey = apiKeyStore.readAPIKey()
-            let messages = AIReminderPromptBuilder.messages(context: context, trigger: trigger)
+            let revision = try memoryStore.read().revision
+            let messages = AIReminderPromptBuilder.messages(context: context, trigger: trigger, memoryContext: try memoryStore.contextMessage())
             logReminderChat(role: "Prompt", content: messages.compactMap(\.content).joined(separator: "\n"))
             let result = try await client.sendReadOnly(
                 messages: messages,
                 settings: aiSettings,
                 apiKey: apiKey
             )
+            try Task.checkCancellation()
+            guard try memoryStore.read().revision == revision else { throw AIGlobalMemoryError.changedDuringRequest }
             logReminderChat(role: "Assistant", content: result.content)
             let decision = try ReminderDecisionParser.parse(result.content)
             if case let .scheduledDeadline(todoID, _, _) = trigger {
@@ -98,11 +106,11 @@ final class AIReminderEngine {
 }
 
 enum AIReminderPromptBuilder {
-    static func messages(context: ReminderContext, trigger: ReminderTrigger) -> [AIChatMessage] {
+    static func messages(context: ReminderContext, trigger: ReminderTrigger, memoryContext: String? = nil) -> [AIChatMessage] {
         [
-            AIChatMessage(role: "system", content: systemPrompt(tone: context.tone)),
-            AIChatMessage(role: "user", content: userContext(context: context, trigger: trigger))
-        ]
+            AIChatMessage(role: "system", content: systemPrompt(tone: context.tone))
+        ] + (memoryContext.map { [AIChatMessage(role: "system", content: $0)] } ?? [])
+            + [AIChatMessage(role: "user", content: userContext(context: context, trigger: trigger))]
     }
 
     private static func systemPrompt(tone: ReminderTone) -> String {

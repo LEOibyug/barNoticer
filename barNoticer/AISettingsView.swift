@@ -5,6 +5,13 @@ struct AISettingsView: View {
     @State private var draft = AISettingsDraft()
     @State private var statusMessage = ""
     @State private var isTestingConnection = false
+    @StateObject private var memoryStore: AIGlobalMemoryStore
+    @State private var memoryClearRequest: AIGlobalMemoryClearRequest?
+    @State private var memoryError = ""
+
+    init(memoryStore: AIGlobalMemoryStore? = nil) {
+        _memoryStore = StateObject(wrappedValue: memoryStore ?? .shared)
+    }
 
     var body: some View {
         ScrollView {
@@ -12,6 +19,7 @@ struct AISettingsView: View {
                 header
                 apiSection
                 behaviorSection
+                memorySection
                 testSection
             }
             .padding(24)
@@ -19,6 +27,20 @@ struct AISettingsView: View {
         }
         .onAppear {
             draft.reload()
+        }
+        .alert("清空全部全局记忆？", isPresented: Binding(
+            get: { memoryClearRequest != nil },
+            set: { if !$0 { memoryClearRequest = nil } }
+        ), presenting: memoryClearRequest) { request in
+            Button("取消", role: .cancel) { memoryClearRequest = nil }
+            Button("确认清空", role: .destructive) {
+                do {
+                    try memoryStore.confirmClear(request)
+                    memoryError = ""
+                } catch { memoryError = error.localizedDescription }
+            }
+        } message: { request in
+            Text("将永久删除 \(request.entryCount) 条全局记忆，无法撤销。待办和当前聊天记录会保留。即使关闭 AI 操作审批，此操作仍需要确认。")
         }
     }
 
@@ -98,6 +120,54 @@ struct AISettingsView: View {
                 }
 
                 Spacer()
+            }
+        }
+    }
+
+    private var memorySection: some View {
+        let result = Result { try memoryStore.read().entries }
+        let entries = (try? result.get()) ?? []
+        return SettingsSection(title: "全局记忆", subtitle: "每轮对话都会带入，跨新对话和应用重启保留。用户定义优先于内置默认偏好，可通过对话查看或修改。") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("记忆保存在本机，并随对话发送给你配置的 AI 服务。AI 可自动记录稳定偏好；用户明确保存的定义优先。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if case let .failure(error) = result {
+                    Text("读取记忆失败：\(error.localizedDescription)")
+                        .foregroundStyle(.red)
+                } else if entries.isEmpty {
+                    Text("暂无全局记忆")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(entries) { entry in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Text(entry.key).font(.subheadline.weight(.semibold))
+                                        Spacer()
+                                        Text(entry.source.title).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Text(entry.content).font(.body).textSelection(.enabled)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 240)
+                }
+                HStack {
+                    Text("\(entries.count) 条记忆").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("清空全部记忆…", role: .destructive) {
+                        do { memoryClearRequest = try memoryStore.requestClear() }
+                        catch { memoryError = error.localizedDescription }
+                    }
+                    .disabled(entries.isEmpty)
+                }
+                if !memoryError.isEmpty {
+                    Text(memoryError).font(.caption).foregroundStyle(.red)
+                }
             }
         }
     }

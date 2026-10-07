@@ -35,9 +35,11 @@ enum AIActionProposal: Equatable, Identifiable {
     case updateGroup(id: UUID, name: String?, colorHex: String?, sortOrder: Int?)
     case deleteGroup(id: UUID)
     case saveDailySummary(id: UUID = UUID(), content: String)
+    case clearGlobalMemory(id: UUID = UUID(), revision: UUID)
 
     var id: UUID {
         switch self {
+        case let .clearGlobalMemory(id, _): return id
         case let .createTodo(id, _, _, _, _, _, _, _, _, _), let .createGroup(id, _, _), let .saveDailySummary(id, _):
             return id
         case let .updateTodo(id, _, _, _, _, _, _, _, _, _, _, _, _, _), let .completeTodo(id), let .deleteTodo(id), let .updateGroup(id, _, _, _), let .deleteGroup(id):
@@ -46,6 +48,11 @@ enum AIActionProposal: Equatable, Identifiable {
     }
 
     var requiresConfirmation: Bool { true }
+
+    var requiresMandatoryConfirmation: Bool {
+        if case .clearGlobalMemory = self { return true }
+        return false
+    }
 
     var reminderChangeSummary: String? {
         if case let .updateTodo(_, _, _, _, _, _, _, _, _, _, _, _, minutes, clears) = self {
@@ -59,7 +66,7 @@ enum AIActionProposal: Equatable, Identifiable {
         switch self {
         case let .updateTodo(id, _, _, _, _, _, _, _, _, _, _, _, _, _), let .completeTodo(id), let .deleteTodo(id):
             return id
-        case .createTodo, .createGroup, .updateGroup, .deleteGroup, .saveDailySummary:
+        case .createTodo, .createGroup, .updateGroup, .deleteGroup, .saveDailySummary, .clearGlobalMemory:
             return nil
         }
     }
@@ -70,7 +77,7 @@ enum AIActionProposal: Equatable, Identifiable {
             return groupID
         case let .updateGroup(id, _, _, _), let .deleteGroup(id):
             return id
-        case .completeTodo, .deleteTodo, .createGroup, .saveDailySummary:
+        case .completeTodo, .deleteTodo, .createGroup, .saveDailySummary, .clearGlobalMemory:
             return nil
         }
     }
@@ -79,13 +86,14 @@ enum AIActionProposal: Equatable, Identifiable {
         switch self {
         case let .createTodo(_, _, _, _, _, deadlineAt, _, _, _, _), let .updateTodo(_, _, _, _, _, deadlineAt, _, _, _, _, _, _, _, _):
             return deadlineAt
-        case .completeTodo, .deleteTodo, .createGroup, .updateGroup, .deleteGroup, .saveDailySummary:
+        case .completeTodo, .deleteTodo, .createGroup, .updateGroup, .deleteGroup, .saveDailySummary, .clearGlobalMemory:
             return nil
         }
     }
 
     var summary: String {
         switch self {
+        case .clearGlobalMemory: return "清空全部全局记忆（必须二次确认）"
         case let .createTodo(_, title, _, priority, _, _, _, _, _, reminderMinutes):
             let suffix = reminderMinutes.map { "；" + TodoScheduledReminder.label(minutes: $0) } ?? ""
             return "新增\(priority.title)重要性事项：\(title)\(suffix)"

@@ -95,6 +95,7 @@ final class AIAssistantPanelController {
             newConversation: { [weak self] in self?.startNewConversation() }
         ))) { [weak self] in
             guard self?.model.isChoosingImages != true else { return }
+            guard self?.model.memoryClearConfirmation == nil else { return }
             self?.close()
         }
     }

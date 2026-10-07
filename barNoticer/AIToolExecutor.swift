@@ -21,15 +21,29 @@ enum AIToolExecutorError: LocalizedError {
 @MainActor
 final class AIToolExecutor {
     private let modelContext: ModelContext
+    private let memoryStore: AIGlobalMemoryStore
 
-    init(modelContext: ModelContext) {
+    init(modelContext: ModelContext, memoryStore: AIGlobalMemoryStore? = nil) {
         self.modelContext = modelContext
+        self.memoryStore = memoryStore ?? .shared
     }
 
     func handle(_ toolCall: AIToolCall) throws -> AIToolHandlingResult {
         let arguments = try ToolArguments(json: toolCall.function.arguments)
 
         switch toolCall.function.name {
+        case "read_global_memory":
+            return .context(Self.encode(try memoryStore.read().entries))
+        case "save_global_memory":
+            guard let source = AIGlobalMemoryEntry.Source(rawValue: try arguments.string("source")) else {
+                throw AIToolExecutorError.invalidArguments
+            }
+            try memoryStore.save(key: arguments.string("key"), content: arguments.string("content"), source: source)
+            return .memoryUpdated("全局记忆已保存。")
+        case "clear_global_memory":
+            let snapshot = try memoryStore.read()
+            guard !snapshot.entries.isEmpty else { return .context("全局记忆已经为空，无需清空。") }
+            return .proposal(.clearGlobalMemory(revision: snapshot.revision))
         case "list_active_todos":
             let snapshot = AITodoContext.snapshot(items: try fetchTodos(), groups: try fetchGroups(), dailySummaries: try fetchDailySummaries())
             return .context(Self.encode(snapshot.activeByGroup))
@@ -104,6 +118,8 @@ final class AIToolExecutor {
     @discardableResult
     func apply(_ proposal: AIActionProposal) throws -> AIActionApplicationResult {
         switch proposal {
+        case .clearGlobalMemory:
+            throw AIGlobalMemoryError.confirmationRequired
         case let .createTodo(id, title, note, priority, groupID, deadlineAt, scheduledTimes, recurrenceRule, recurrenceAnchor, reminderMinutes):
             if reminderMinutes != nil {
                 guard deadlineAt != nil, scheduledTimes.isEmpty, recurrenceRule == nil,
@@ -238,6 +254,7 @@ final class AIToolExecutor {
 
 enum AIToolHandlingResult: Equatable {
     case context(String)
+    case memoryUpdated(String)
     case proposal(AIActionProposal)
 }
 
