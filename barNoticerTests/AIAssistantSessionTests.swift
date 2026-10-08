@@ -59,6 +59,34 @@ final class AIAssistantSessionTests: XCTestCase {
         XCTAssertEqual(fixture.presenter.replies.count, 1)
     }
 
+    func testCompletingTodoRespectsConfirmationSettingAndReportsExecution() async throws {
+        for needsConfirmation in [false, true] {
+            let fixture = try Fixture(confirmActions: needsConfirmation)
+            defer { fixture.cleanUp() }
+            let item = TodoItem(title: "需要完成的事项")
+            fixture.container.mainContext.insert(item)
+            try fixture.container.mainContext.save()
+            let args = String(data: try JSONSerialization.data(withJSONObject: ["id": item.id.uuidString]), encoding: .utf8)!
+            let toolResponse: [String: Any] = ["choices": [["message": ["content": "", "tool_calls": [
+                ["id": "complete", "type": "function", "function": ["name": "complete_todo", "arguments": args]]
+            ]]]]]
+            SessionURLProtocol.responses = [String(data: try JSONSerialization.data(withJSONObject: toolResponse), encoding: .utf8)!,
+                #"{"choices":[{"message":{"content":""}}]}"#]
+            fixture.model.prompt = "标记事项已经完成"
+            fixture.model.submit()
+            try await waitForCompletion(fixture.model)
+            XCTAssertEqual(item.isCompleted, !needsConfirmation)
+            XCTAssertEqual(fixture.model.proposals.count, needsConfirmation ? 1 : 0)
+            let messages = try XCTUnwrap(SessionURLProtocol.requests.first?["messages"] as? [[String: Any]])
+            let system = messages.filter { $0["role"] as? String == "system" }.compactMap { $0["content"] as? String }.joined()
+            XCTAssertTrue(system.contains(needsConfirmation ? "当前普通操作需要确认" : "当前普通操作无需确认"))
+            if !needsConfirmation {
+                XCTAssertFalse(fixture.model.response.contains("待确认"))
+                XCTAssertTrue(fixture.model.response.contains("已执行"))
+            }
+        }
+    }
+
     func testPendingActionsSurviveCloseAndReopenUntilConfirmed() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
@@ -103,8 +131,9 @@ final class AIAssistantSessionTests: XCTestCase {
     func testReopeningDuringCloseAnimationDoesNotHideTheReopenedWindow() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
+        let existing = Set(NSApp.windows.map(ObjectIdentifier.init))
         fixture.controller.show()
-        let window = try XCTUnwrap(NSApp.keyWindow)
+        let window = try XCTUnwrap(NSApp.windows.first { !existing.contains(ObjectIdentifier($0)) && $0.isVisible })
         fixture.controller.close()
         fixture.controller.show()
         try await Task.sleep(for: .milliseconds(350))

@@ -11,8 +11,8 @@ struct TodoScheduledReminder: Equatable {
     var trigger: ReminderTrigger { .scheduledDeadline(todoID: todoID, deadline: deadline, minutesBefore: minutesBefore) }
 
     init?(item: TodoItem) {
-        guard !item.isCompleted, item.scheduleKind == .singleDeadline,
-              let deadline = item.deadlineAt, let minutes = item.reminderMinutesBefore,
+        guard !item.isCompleted, [.singleDeadline, .recurring].contains(item.scheduleKind),
+              let deadline = item.deferredAutomaticReminderAt ?? item.pendingOccurrence(), let minutes = item.reminderMinutesBefore,
               (0...Self.maximumMinutes).contains(minutes) else { return nil }
         self.todoID = item.id
         self.deadline = deadline

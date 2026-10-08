@@ -208,9 +208,15 @@ struct TodoRow: View {
 
                 Section("时间计划") {
                     TodoScheduleEditor(draft: $scheduleDraft, layout: .form)
-                    if scheduleDraft.kind == .singleDeadline {
-                        TodoReminderEditor(minutesBefore: $scheduleDraft.reminderMinutesBefore)
-                        if let minutes = scheduleDraft.reminderMinutesBefore {
+                    if scheduleDraft.supportsReminder {
+                        TodoReminderEditor(minutesBefore: $scheduleDraft.reminderMinutesBefore, isRecurring: scheduleDraft.kind == .recurring)
+                        if scheduleDraft.kind == .recurring {
+                            Text(scheduleDraft.automaticallyCompletes
+                                ? "到点自动完成并进入下一次，不累计逾期。提醒设置会持续沿用。"
+                                : "每次按当前未完成的一次提醒，完成后自动延续，直到关闭提醒。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else if let minutes = scheduleDraft.reminderMinutesBefore {
                             Text("提醒时间：\(scheduleDraft.deadline.addingTimeInterval(-Double(minutes) * 60).formatted(date: .abbreviated, time: .shortened))")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)

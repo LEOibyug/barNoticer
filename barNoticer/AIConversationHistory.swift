@@ -205,7 +205,11 @@ enum AIVisibleResponse {
         fallbackText(toolNames: Array(repeating: "", count: toolCallCount), proposalCount: proposalCount)
     }
 
-    static func fallbackText(toolNames: [String], proposalCount: Int) -> String {
+    static func fallbackText(toolNames: [String], proposalCount: Int, appliedCount: Int = 0) -> String {
+        if appliedCount > 0 {
+            let pending = proposalCount > 0 ? "另有 \(proposalCount) 项操作待确认。" : ""
+            return "已执行 \(appliedCount) 项操作。" + pending
+        }
         if proposalCount > 0 {
             return "已整理出 \(proposalCount) 项待确认操作。"
         }

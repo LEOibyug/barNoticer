@@ -8,6 +8,201 @@ import AppKit
 final class ScheduledReminderTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 2_000_000_000)
 
+    func testRecurringReminderTracksIncompleteOccurrenceAndInheritsUntilCancelled() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let anchor = now.addingTimeInterval(1_800)
+        let item = TodoItem(title: "每天复盘", recurrenceRule: .daily, recurrenceAnchor: anchor, reminderMinutesBefore: 30)
+        fixture.container.mainContext.insert(item)
+        fixture.scheduler.refresh(now: now.addingTimeInterval(-1))
+        XCTAssertTrue(fixture.presenter.deliveries.isEmpty)
+        fixture.scheduler.refresh(now: now)
+        XCTAssertEqual(fixture.presenter.deliveries.count, 1)
+        fixture.makeScheduler().refresh(now: now.addingTimeInterval(90_000))
+        XCTAssertEqual(fixture.presenter.deliveries.count, 1, "Do not advance overdue, incomplete occurrences")
+        item.completeCurrentOccurrence(now: anchor.addingTimeInterval(100))
+        XCTAssertEqual(item.lastCompletedOccurrenceAt, anchor)
+        XCTAssertEqual(item.reminderMinutesBefore, 30)
+        let next = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: 1, to: anchor))
+        fixture.scheduler.refresh(now: next.addingTimeInterval(-1_800))
+        XCTAssertEqual(fixture.presenter.deliveries.count, 2)
+        XCTAssertEqual(fixture.presenter.triggers.last, .scheduledDeadline(todoID: item.id, deadline: next, minutesBefore: 30))
+        item.updateReminder(minutesBefore: nil)
+        item.completeCurrentOccurrence(now: next)
+        fixture.scheduler.refresh(now: next.addingTimeInterval(90_000))
+        XCTAssertEqual(fixture.presenter.deliveries.count, 2)
+    }
+
+    func testAIAndEditorCanSetRecurringReminderWithoutConvertingSchedule() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let executor = AIToolExecutor(modelContext: fixture.container.mainContext)
+        try executor.apply(.createTodo(title: "周期任务", priority: .high, recurrenceRule: .weekly,
+            recurrenceAnchor: now, reminderMinutesBefore: 60))
+        let item = try XCTUnwrap(fixture.container.mainContext.fetch(FetchDescriptor<TodoItem>()).first)
+        var draft = TodoScheduleDraft(item: item)
+        draft.reminderMinutesBefore = 120
+        XCTAssertEqual(TodoScheduleCommitter.commit(&draft, into: item, context: fixture.container.mainContext), .saved)
+        XCTAssertEqual(item.reminderMinutesBefore, 120)
+        try executor.apply(.updateTodo(id: item.id, title: nil, priority: nil, reminderMinutesBefore: 15))
+        XCTAssertEqual(item.scheduleKind, .recurring)
+        XCTAssertEqual(item.reminderMinutesBefore, 15)
+        try executor.apply(.updateTodo(id: item.id, title: nil, priority: nil, clearsReminder: true))
+        XCTAssertNil(item.reminderMinutesBefore)
+        XCTAssertEqual(item.scheduleKind, .recurring)
+    }
+
+    func testCompletingRecurringOccurrenceAutomaticallySchedulesNextReminder() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let anchor = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: -1, to: Date().addingTimeInterval(-60)))
+        let item = TodoItem(title: "每日检查", recurrenceRule: .daily, recurrenceAnchor: anchor, reminderMinutesBefore: 0)
+        fixture.container.mainContext.insert(item)
+        try fixture.container.mainContext.save()
+        fixture.scheduler.start()
+        XCTAssertEqual(fixture.presenter.deliveries.count, 1)
+        item.completeCurrentOccurrence()
+        try fixture.container.mainContext.save()
+        for _ in 0..<50 where fixture.presenter.deliveries.count < 2 { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(fixture.presenter.deliveries.count, 2, "Saving completion must reschedule without manual refresh")
+        item.updateReminder(minutesBefore: nil)
+        item.completeCurrentOccurrence()
+        try fixture.container.mainContext.save()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(fixture.scheduler.isTimerArmed)
+        XCTAssertEqual(fixture.presenter.deliveries.count, 2)
+    }
+
+    func testRecurringReminderProgressAndDeliverySurviveStoreReopen() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("RecurringPersistence-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configuration = ModelConfiguration(url: directory.appendingPathComponent("store.sqlite"))
+        let anchor = now
+        var deliveredKey = ""
+        do {
+            let container = try ModelContainer(for: TodoItem.self, configurations: configuration)
+            let item = TodoItem(title: "周期", recurrenceRule: .monthly, recurrenceAnchor: anchor, reminderMinutesBefore: 60)
+            container.mainContext.insert(item)
+            item.completeCurrentOccurrence(now: anchor)
+            deliveredKey = try XCTUnwrap(TodoScheduledReminder(item: item)).key
+            item.lastDeliveredReminderKey = deliveredKey
+            try container.mainContext.save()
+        }
+        let reopened = try ModelContainer(for: TodoItem.self, configurations: configuration)
+        let item = try XCTUnwrap(reopened.mainContext.fetch(FetchDescriptor<TodoItem>()).first)
+        XCTAssertEqual(item.reminderMinutesBefore, 60)
+        XCTAssertEqual(item.lastCompletedOccurrenceAt, anchor)
+        XCTAssertNil(TodoScheduledReminder(item: item), "The delivered occurrence must not repeat after relaunch")
+        item.completeCurrentOccurrence(now: now)
+        XCTAssertNotEqual(try XCTUnwrap(TodoScheduledReminder(item: item)).key, deliveredKey)
+    }
+
+    func testAutomaticRecurringCompletionRunsWithoutReminderOrAIAndCatchesUp() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let anchor = now.addingTimeInterval(-3 * 86_400)
+        let item = TodoItem(title: "自动周期", recurrenceRule: .daily, recurrenceAnchor: anchor, automaticallyCompletes: true)
+        fixture.container.mainContext.insert(item)
+        fixture.scheduler.refresh(now: now)
+        XCTAssertEqual(item.lastCompletedOccurrenceAt, now)
+        XCTAssertFalse(item.isCompleted)
+        XCTAssertEqual(item.nextOccurrence(after: now), now.addingTimeInterval(86_400))
+        XCTAssertFalse(TodoDeadlineFormatter.cardText(for: item, now: now)!.contains("逾期"))
+        XCTAssertTrue(fixture.presenter.deliveries.isEmpty)
+        item.updateAutomaticCompletion(false, now: now)
+        fixture.scheduler.refresh(now: now.addingTimeInterval(2 * 86_400))
+        XCTAssertEqual(item.lastCompletedOccurrenceAt, now)
+        XCTAssertTrue(TodoDeadlineFormatter.cardText(for: item, now: now.addingTimeInterval(2 * 86_400))!.contains("逾期"))
+    }
+
+    func testAutomaticCompletionKeepsZeroOffsetReminderAndNextOccurrence() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let item = TodoItem(title: "到点提醒并完成", recurrenceRule: .daily, recurrenceAnchor: now,
+            reminderMinutesBefore: 0, automaticallyCompletes: true)
+        fixture.container.mainContext.insert(item)
+        fixture.scheduler.refresh(now: now)
+        XCTAssertEqual(fixture.presenter.deliveries.count, 1)
+        XCTAssertEqual(item.lastCompletedOccurrenceAt, now)
+        XCTAssertEqual(item.reminderMinutesBefore, 0)
+        fixture.makeScheduler().refresh(now: now)
+        XCTAssertEqual(fixture.presenter.deliveries.count, 1)
+        fixture.scheduler.refresh(now: now.addingTimeInterval(86_400))
+        XCTAssertEqual(fixture.presenter.deliveries.count, 2)
+        XCTAssertEqual(item.lastCompletedOccurrenceAt, now.addingTimeInterval(86_400))
+    }
+
+    func testAutomaticCompletionTimerRunsEvenWithNoRemindersEnabled() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let anchor = Date().addingTimeInterval(0.3)
+        let item = TodoItem(title: "无提醒自动推进", recurrenceRule: .daily, recurrenceAnchor: anchor, automaticallyCompletes: true)
+        fixture.container.mainContext.insert(item)
+        try fixture.container.mainContext.save()
+        fixture.scheduler.start()
+        XCTAssertTrue(fixture.scheduler.isTimerArmed)
+        for _ in 0..<100 where item.lastCompletedOccurrenceAt == nil { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(item.lastCompletedOccurrenceAt, anchor)
+        XCTAssertTrue(fixture.scheduler.isTimerArmed)
+    }
+
+    func testAutomaticCompletionSettingAndProgressSurviveRelaunch() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AutoCompletionPersistence-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configuration = ModelConfiguration(url: directory.appendingPathComponent("store.sqlite"))
+        do {
+            let container = try ModelContainer(for: TodoItem.self, configurations: configuration)
+            let item = TodoItem(title: "周期", recurrenceRule: .daily, recurrenceAnchor: now.addingTimeInterval(-86_400))
+            container.mainContext.insert(item)
+            item.updateAutomaticCompletion(true, now: now)
+            try container.mainContext.save()
+        }
+        let reopened = try ModelContainer(for: TodoItem.self, configurations: configuration)
+        let item = try XCTUnwrap(reopened.mainContext.fetch(FetchDescriptor<TodoItem>()).first)
+        XCTAssertTrue(item.automaticallyCompletes)
+        XCTAssertEqual(item.lastCompletedOccurrenceAt, now)
+        XCTAssertEqual(item.nextOccurrence(after: now), now.addingTimeInterval(86_400))
+        item.clearSchedule()
+        XCTAssertFalse(item.automaticallyCompletes)
+    }
+
+    func testAIAutomaticCompletionToolUsesNormalProposalAndRejectsNonRecurringTasks() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let item = TodoItem(title: "自动", recurrenceRule: .daily, recurrenceAnchor: Date().addingTimeInterval(-100))
+        fixture.container.mainContext.insert(item)
+        let executor = AIToolExecutor(modelContext: fixture.container.mainContext)
+        let call = AIToolCall(id: "auto", type: "function", function: .init(name: "set_recurring_auto_completion",
+            arguments: #"{"id":"\#(item.id)","enabled":true}"#))
+        guard case let .proposal(proposal) = try executor.handle(call) else { return XCTFail() }
+        XCTAssertFalse(proposal.requiresMandatoryConfirmation)
+        XCTAssertFalse(item.automaticallyCompletes)
+        try executor.apply(proposal)
+        XCTAssertTrue(item.automaticallyCompletes)
+        XCTAssertNotNil(item.lastCompletedOccurrenceAt)
+        item.clearSchedule()
+        XCTAssertThrowsError(try executor.apply(proposal))
+    }
+
+    func testDisablingAutomaticCompletionAtDeadlinePreservesUndeliveredReminder() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let item = TodoItem(title: "到点关闭自动", recurrenceRule: .daily, recurrenceAnchor: now,
+            reminderMinutesBefore: 0, automaticallyCompletes: true)
+        fixture.container.mainContext.insert(item)
+        item.updateAutomaticCompletion(false, now: now)
+        try fixture.container.mainContext.save()
+        XCTAssertEqual(item.lastCompletedOccurrenceAt, now)
+        fixture.makeScheduler().refresh(now: now)
+        XCTAssertEqual(fixture.presenter.deliveries.count, 1)
+        XCTAssertEqual(fixture.presenter.triggers.first, .scheduledDeadline(todoID: item.id, deadline: now, minutesBefore: 0))
+        XCTAssertNil(item.deferredAutomaticReminderAt)
+        fixture.scheduler.refresh(now: now)
+        XCTAssertEqual(fixture.presenter.deliveries.count, 1)
+    }
+
     func testCreatingTodoThroughAIStoresReminderInContext() throws {
         let container = try TestSupport.makeInMemoryContainer()
         let executor = AIToolExecutor(modelContext: container.mainContext)
@@ -77,14 +272,14 @@ final class ScheduledReminderTests: XCTestCase {
         XCTAssertTrue(fixture.presenter.deliveries[0].message.contains("截止"))
     }
 
-    func testCompletedDisabledDeletedAndNonDeadlineTasksDoNotRemind() throws {
+    func testCompletedDisabledDeletedAndMultipleTimeTasksDoNotRemind() throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
         let completed = TodoItem(title: "已完成", deadlineAt: now, isCompleted: true, reminderMinutesBefore: 30)
         let disabled = TodoItem(title: "关闭", deadlineAt: now)
-        let recurring = TodoItem(title: "重复", recurrenceRule: .daily, recurrenceAnchor: now, reminderMinutesBefore: 30)
+        let multiple = TodoItem(title: "多个时间点", scheduledTimes: [now], reminderMinutesBefore: 30)
         let deleted = TodoItem(title: "已删除", deadlineAt: now, reminderMinutesBefore: 30)
-        for item in [completed, disabled, recurring, deleted] { fixture.container.mainContext.insert(item) }
+        for item in [completed, disabled, multiple, deleted] { fixture.container.mainContext.insert(item) }
         fixture.container.mainContext.delete(deleted)
         fixture.scheduler.refresh(now: now)
         XCTAssertTrue(fixture.presenter.deliveries.isEmpty)

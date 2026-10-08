@@ -331,7 +331,7 @@ private struct AIProposalRow: View {
             return "完成事项"
         case .deleteTodo:
             return "删除事项"
-        case .updateTodo:
+        case .updateTodo, .setRecurringAutoCompletion:
             return "修改事项"
         case .createTodo:
             return "新增事项"

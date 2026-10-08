@@ -92,7 +92,7 @@ final class AIReminderEngine {
                 throw AIClientError.invalidResponse
             }
             messages.append(AIChatMessage(role: "assistant", content: result.content,
-                                          reasoningContent: result.reasoningContent, toolCalls: result.toolCalls))
+                                          reasoningContent: result.reasoningContent, toolCalls: result.toolCalls, responseItems: result.responseItems, responseProviderID: result.responseProviderID))
             let content = try memoryStore.toolContent()
             for call in result.toolCalls {
                 messages.append(AIChatMessage(role: "tool", content: content, toolCallID: call.id))
@@ -264,41 +264,7 @@ enum ReminderDeadlinePolicy {
 
 private extension AIClient {
     func sendReadOnly(messages: [AIChatMessage], settings: AISettings, apiKey: String, allowsMemoryLookup: Bool) async throws -> AIChatResult {
-        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw AIClientError.missingAPIKey
-        }
-        guard settings.isValid else { throw AIClientError.invalidSettings }
-        var request = try AIChatRequestBuilder.make(messages: messages, settings: settings, apiKey: apiKey, tools: allowsMemoryLookup ? [AIToolSchema.readGlobalMemoryTool] : [])
-        request.timeoutInterval = 10
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AIClientError.invalidResponse
-        }
-        guard 200..<300 ~= httpResponse.statusCode else {
-            throw AIClientError.requestFailed(httpResponse.statusCode, String(data: data, encoding: .utf8) ?? "")
-        }
-        let decoded = try JSONDecoder().decode(AIReadOnlyChatResponse.self, from: data)
-        guard let message = decoded.choices.first?.message else { throw AIClientError.invalidResponse }
-        return AIChatResult(content: message.content ?? "", reasoningContent: message.reasoningContent, toolCalls: message.toolCalls ?? [])
+        try await send(messages: messages, settings: settings, apiKey: apiKey,
+            tools: allowsMemoryLookup ? [AIToolSchema.readGlobalMemoryTool] : [], timeout: 10)
     }
-}
-
-private struct AIReadOnlyChatResponse: Decodable {
-    struct Choice: Decodable {
-        struct Message: Decodable {
-            var content: String?
-            var reasoningContent: String?
-            var toolCalls: [AIToolCall]?
-
-            enum CodingKeys: String, CodingKey {
-                case content
-                case reasoningContent = "reasoning_content"
-                case toolCalls = "tool_calls"
-            }
-        }
-
-        var message: Message
-    }
-
-    var choices: [Choice]
 }

@@ -8,6 +8,7 @@ struct AITodoItemSnapshot: Equatable, Identifiable, Codable {
     let groupID: UUID
     let groupName: String
     let deadlineAt: Date?
+    var automaticallyCompletes: Bool = false
     let reminderMinutesBefore: Int?
     let scheduledTimes: [Date]
     let recurrenceRule: TodoRecurrenceRule?
@@ -118,7 +119,7 @@ extension AITodoSnapshot {
                 let anchorText = item.recurrenceAnchor.map(Self.iso8601) ?? "none"
                 let anchorLocalText = item.recurrenceAnchor.map { Self.localDateTime($0, timeZone: timeZone) } ?? "none"
                 let noteText = item.note?.replacingOccurrences(of: "\n", with: " ") ?? "none"
-                return "- id=\(item.id.uuidString) title=\(item.title) note=\(noteText) group=\(item.groupName) reminderMinutesBefore=\(item.reminderMinutesBefore.map(String.init) ?? "none") scheduleKind=\(item.scheduleKind.rawValue) deadlineAt=\(deadlineText) deadlineLocal=\(deadlineLocalText) scheduledTimes=[\(scheduledText)] scheduledTimesLocal=[\(scheduledLocalText)] recurrenceRule=\(recurrenceText) recurrenceAnchor=\(anchorText) recurrenceAnchorLocal=\(anchorLocalText) nextOccurrenceAt=\(nextText) nextOccurrenceLocal=\(nextLocalText) createdAt=\(Self.iso8601(item.createdAt)) updatedAt=\(Self.iso8601(item.updatedAt))"
+                return "- id=\(item.id.uuidString) title=\(item.title) note=\(noteText) group=\(item.groupName) reminderMinutesBefore=\(item.reminderMinutesBefore.map(String.init) ?? "none") scheduleKind=\(item.scheduleKind.rawValue) automaticallyCompletes=\(item.automaticallyCompletes) deadlineAt=\(deadlineText) deadlineLocal=\(deadlineLocalText) scheduledTimes=[\(scheduledText)] scheduledTimesLocal=[\(scheduledLocalText)] recurrenceRule=\(recurrenceText) recurrenceAnchor=\(anchorText) recurrenceAnchorLocal=\(anchorLocalText) nextOccurrenceAt=\(nextText) nextOccurrenceLocal=\(nextLocalText) createdAt=\(Self.iso8601(item.createdAt)) updatedAt=\(Self.iso8601(item.updatedAt))"
             })
         }
 
@@ -178,6 +179,7 @@ extension AITodoItemSnapshot {
         groupID = group.id
         groupName = group.name
         deadlineAt = item.deadlineAt
+        automaticallyCompletes = item.automaticallyCompletes
         reminderMinutesBefore = item.reminderMinutesBefore
         scheduledTimes = item.scheduledTimes
         recurrenceRule = item.recurrenceRule

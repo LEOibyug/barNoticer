@@ -135,6 +135,41 @@ final class TodoScheduleDraftTests: XCTestCase {
         XCTAssertEqual(outcome, .itemDeleted)
     }
 
+    func testStaleRecurringEditorDoesNotRestoreCancelledReminder() throws {
+        let item = TodoItem(title: "周期", recurrenceRule: .daily,
+            recurrenceAnchor: Date.now, reminderMinutesBefore: 30)
+        context.insert(item)
+        try context.save()
+        var draft = TodoScheduleDraft(item: item)
+        item.updateReminder(minutesBefore: nil) // AI cancels while the editor remains open.
+        try context.save()
+        draft.recurrenceRule = .weekly
+        XCTAssertEqual(TodoScheduleCommitter.commit(&draft, into: item, context: context), .saved)
+        XCTAssertNil(item.reminderMinutesBefore)
+        XCTAssertFalse(draft.hasChanges)
+        XCTAssertEqual(TodoScheduleCommitter.commit(&draft, into: item, context: context), .saved)
+        XCTAssertNil(item.reminderMinutesBefore)
+    }
+
+    func testAutomaticCompletionDraftEnablesCatchUpAndPersistsWithoutResettingProgress() throws {
+        let anchor = Date().addingTimeInterval(-40 * 86_400)
+        let item = TodoItem(title: "积压周期", recurrenceRule: .weekly, recurrenceAnchor: anchor, reminderMinutesBefore: 60)
+        context.insert(item)
+        try context.save()
+        var draft = TodoScheduleDraft(item: item)
+        XCTAssertFalse(draft.automaticallyCompletes)
+        draft.automaticallyCompletes = true
+        XCTAssertEqual(TodoScheduleCommitter.commit(&draft, into: item, context: context), .saved)
+        XCTAssertTrue(item.automaticallyCompletes)
+        XCTAssertGreaterThan(item.nextOccurrence()!, Date())
+        let progress = item.lastCompletedOccurrenceAt
+        XCTAssertNotNil(progress)
+        XCTAssertEqual(item.reminderMinutesBefore, 60)
+        XCTAssertFalse(draft.hasChanges)
+        XCTAssertEqual(TodoScheduleCommitter.commit(&draft, into: item, context: context), .saved)
+        XCTAssertEqual(item.lastCompletedOccurrenceAt, progress)
+    }
+
     func testDraftWithSingleScheduledTimePadsToTwoEditableTimes() throws {
         // scheduledTimes 经 ISO8601 编解码，测试时间点使用整秒避免亚秒精度差异。
         let only = Date(timeIntervalSince1970: 1_800)

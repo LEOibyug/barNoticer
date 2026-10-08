@@ -84,6 +84,9 @@ final class AIToolExecutor {
                 reminderMinutesBefore: try arguments.reminderMinutes(),
                 clearsReminder: arguments.optionalBool("clear_reminder") ?? false
             ))
+        case "set_recurring_auto_completion":
+            guard let enabled = arguments.optionalBool("enabled") else { throw AIToolExecutorError.invalidArguments }
+            return .proposal(.setRecurringAutoCompletion(id: try arguments.uuid("id"), enabled: enabled))
         case "complete_todo":
             return .proposal(.completeTodo(id: try arguments.uuid("id")))
         case "delete_todo":
@@ -118,11 +121,19 @@ final class AIToolExecutor {
     @discardableResult
     func apply(_ proposal: AIActionProposal) throws -> AIActionApplicationResult {
         switch proposal {
+        case let .setRecurringAutoCompletion(id, enabled):
+            let item = try fetchTodo(id: id)
+            guard item.scheduleKind == .recurring else { throw AIToolExecutorError.invalidArguments }
+            item.updateAutomaticCompletion(enabled)
+            try modelContext.save()
+            return .updatedTodo(id: id)
         case .clearGlobalMemory:
             throw AIGlobalMemoryError.confirmationRequired
         case let .createTodo(id, title, note, priority, groupID, deadlineAt, scheduledTimes, recurrenceRule, recurrenceAnchor, reminderMinutes):
             if reminderMinutes != nil {
-                guard deadlineAt != nil, scheduledTimes.isEmpty, recurrenceRule == nil,
+                let validSchedule = (deadlineAt != nil && recurrenceRule == nil && recurrenceAnchor == nil)
+                    || (deadlineAt == nil && recurrenceRule != nil && recurrenceAnchor != nil)
+                guard validSchedule, scheduledTimes.isEmpty,
                       (0...TodoScheduledReminder.maximumMinutes).contains(reminderMinutes!) else {
                     throw AIToolExecutorError.invalidArguments
                 }
@@ -144,9 +155,12 @@ final class AIToolExecutor {
         case let .updateTodo(id, title, note, priority, groupID, deadlineAt, scheduledTimes, recurrenceRule, recurrenceAnchor, clearsNote, clearsDeadline, clearsSchedule, reminderMinutes, clearsReminder):
             let item = try fetchTodo(id: id)
             if let reminderMinutes {
-                guard !clearsReminder, !clearsDeadline, !clearsSchedule,
-                      scheduledTimes.isEmpty, recurrenceRule == nil, recurrenceAnchor == nil,
-                      deadlineAt != nil || item.scheduleKind == .singleDeadline,
+                let changesSchedule = deadlineAt != nil || !scheduledTimes.isEmpty || recurrenceRule != nil || recurrenceAnchor != nil
+                let validSchedule = changesSchedule
+                    ? scheduledTimes.isEmpty && ((deadlineAt != nil && recurrenceRule == nil && recurrenceAnchor == nil)
+                        || (deadlineAt == nil && recurrenceRule != nil && recurrenceAnchor != nil))
+                    : [.singleDeadline, .recurring].contains(item.scheduleKind)
+                guard !clearsReminder, !clearsDeadline, !clearsSchedule, validSchedule,
                       (0...TodoScheduledReminder.maximumMinutes).contains(reminderMinutes) else {
                     throw AIToolExecutorError.invalidArguments
                 }

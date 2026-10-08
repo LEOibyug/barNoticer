@@ -54,6 +54,10 @@ struct TodoScheduleEditor: View {
                     Text("开始").foregroundStyle(.secondary)
                     formDatePicker($draft.recurrenceAnchor)
                 }
+                GridRow {
+                    Text("完成方式").foregroundStyle(.secondary)
+                    automaticCompletionToggle
+                }
             }
         }
     }
@@ -74,12 +78,19 @@ struct TodoScheduleEditor: View {
             case .recurring:
                 recurrencePicker
                 compactDatePicker("开始", selection: $draft.recurrenceAnchor)
+                automaticCompletionToggle
             }
 
             Spacer(minLength: 0)
         }
         .frame(minHeight: 30, alignment: .leading)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: draft.kind)
+    }
+
+    private var automaticCompletionToggle: some View {
+        Toggle("到点自动完成", isOn: $draft.automaticallyCompletes)
+            .toggleStyle(.checkbox)
+            .help("开启后自动完成已到时间的次数并进入下一次，不累计逾期；关闭后需手动完成。")
     }
 
     private var kindPicker: some View {

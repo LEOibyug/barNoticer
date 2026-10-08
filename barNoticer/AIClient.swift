@@ -26,6 +26,8 @@ struct AIChatMessage: Codable, Equatable {
     var reasoningContent: String?
     var toolCallID: String?
     var toolCalls: [AIToolCall]?
+    var responseProviderID: UUID? = nil
+    var responseItems: [JSONValue]? = nil
     var imageURLs: [String]
 
     init(
@@ -34,8 +36,12 @@ struct AIChatMessage: Codable, Equatable {
         reasoningContent: String? = nil,
         toolCallID: String? = nil,
         toolCalls: [AIToolCall]? = nil,
-        imageURLs: [String] = []
+        imageURLs: [String] = [],
+        responseItems: [JSONValue]? = nil,
+        responseProviderID: UUID? = nil
     ) {
+        self.responseProviderID = responseProviderID
+        self.responseItems = responseItems
         self.role = role
         self.content = content
         self.reasoningContent = reasoningContent
@@ -110,6 +116,8 @@ struct AIChatResult: Equatable {
     var content: String
     var reasoningContent: String?
     var toolCalls: [AIToolCall]
+    var responseProviderID: UUID? = nil
+    var responseItems: [JSONValue]? = nil
 }
 
 struct AIClient {
@@ -119,20 +127,8 @@ struct AIClient {
         settings: AISettings,
         apiKey: String
     ) async throws {
-        let request = try AIConnectivityCheckRequest.make(settings: settings, apiKey: apiKey)
-        let (data, response) = try await session.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AIClientError.invalidResponse
-        }
-        guard 200..<300 ~= httpResponse.statusCode else {
-            throw AIClientError.requestFailed(httpResponse.statusCode, String(data: data, encoding: .utf8) ?? "")
-        }
-
-        let decoded = try JSONDecoder().decode(AIChatResponse.self, from: data)
-        guard decoded.choices.first?.message.content != nil || decoded.choices.first?.message.toolCalls != nil else {
-            throw AIClientError.invalidResponse
-        }
+        _ = try await send(messages: [AIChatMessage(role: "user", content: "请简短回复：连接可用")],
+            settings: settings, apiKey: apiKey, tools: [], timeout: 20)
     }
 
     func send(
@@ -156,127 +152,66 @@ struct AIClient {
         settings: AISettings,
         apiKey: String
     ) async throws -> AIChatResult {
-        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw AIClientError.missingAPIKey
-        }
-        guard settings.isValid else { throw AIClientError.invalidSettings }
-
-        let request = try AIChatRequestBuilder.make(
-            messages: messages,
-            settings: settings,
-            apiKey: apiKey,
-            tools: AIToolSchema.openAICompatibleTools
-        )
-
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AIClientError.invalidResponse
-        }
-        guard 200..<300 ~= httpResponse.statusCode else {
-            throw AIClientError.requestFailed(httpResponse.statusCode, String(data: data, encoding: .utf8) ?? "")
-        }
-
-        let decoded = try JSONDecoder().decode(AIChatResponse.self, from: data)
-        guard let message = decoded.choices.first?.message else {
-            throw AIClientError.invalidResponse
-        }
-
-        return AIChatResult(
-            content: message.content ?? "",
-            reasoningContent: message.reasoningContent,
-            toolCalls: message.toolCalls ?? []
-        )
+        try await send(messages: messages, settings: settings, apiKey: apiKey, tools: AIToolSchema.openAICompatibleTools)
     }
+
+    func send(messages: [AIChatMessage], settings: AISettings, apiKey: String,
+              tools: [AIToolDefinition], timeout: TimeInterval = 45) async throws -> AIChatResult {
+        let routes = settings.providerRoutes ?? [AIProviderConfiguration(name: "当前配置",
+            baseURL: settings.baseURL.absoluteString, responseFormat: settings.responseFormat, apiKey: apiKey, model: settings.model)]
+        guard !routes.isEmpty else { throw AIClientError.invalidSettings }
+        var lastError: Error = AIClientError.invalidSettings
+        for provider in routes {
+            try Task.checkCancellation()
+            do {
+                let providerID = settings.providerRoutes == nil ? nil : provider.id
+                var request = try AIProviderTransport.request(messages: messages, settings: provider.settings, key: provider.apiKey, tools: tools, providerID: providerID)
+                request.timeoutInterval = timeout
+                let (data, response) = try await session.data(for: request)
+                try Task.checkCancellation()
+                guard let http = response as? HTTPURLResponse else { throw AIClientError.invalidResponse }
+                guard 200..<300 ~= http.statusCode else {
+                    throw AIClientError.requestFailed(http.statusCode, "供应商未能完成请求")
+                }
+                var result = try AIProviderTransport.decode(data, format: provider.responseFormat)
+                result.responseProviderID = providerID
+                return result
+            } catch {
+                if Task.isCancelled || (error as? URLError)?.code == .cancelled { throw CancellationError() }
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
 }
 
 enum AIChatRequestBuilder {
-    static func make(
-        messages: [AIChatMessage],
-        settings: AISettings,
-        apiKey: String,
-        tools: [AIToolDefinition]
-    ) throws -> URLRequest {
-        var request = URLRequest(url: settings.chatCompletionsURL)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(
-            AIChatRequest(
-                model: settings.model,
-                messages: messages,
-                tools: tools
-            )
-        )
-        return request
+    static func make(messages: [AIChatMessage], settings: AISettings, apiKey: String,
+                     tools: [AIToolDefinition]) throws -> URLRequest {
+        try AIProviderTransport.request(messages: messages, settings: settings, key: apiKey, tools: tools)
     }
 }
 
 enum AIConnectivityCheckRequest {
     static func make(settings: AISettings, apiKey: String) throws -> URLRequest {
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedKey.isEmpty else {
-            throw AIClientError.missingAPIKey
-        }
-        guard settings.isValid else { throw AIClientError.invalidSettings }
-
-        var request = URLRequest(url: settings.chatCompletionsURL)
-        request.httpMethod = "POST"
+        var request = try AIProviderTransport.request(messages: [
+            AIChatMessage(role: "system", content: "你只需要用中文回复：连接可用。"),
+            AIChatMessage(role: "user", content: "测试连接")
+        ], settings: settings, key: apiKey, tools: [], maxTokens: 12)
         request.timeoutInterval = 20
-        request.setValue("Bearer \(trimmedKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(
-            AIConnectivityCheckBody(
-                model: settings.model,
-                messages: [
-                    AIChatMessage(role: "system", content: "你只需要用中文回复：连接可用。"),
-                    AIChatMessage(role: "user", content: "测试连接")
-                ],
-                maxTokens: 12
-            )
-        )
         return request
     }
 }
 
-private struct AIConnectivityCheckBody: Codable {
-    var model: String
-    var messages: [AIChatMessage]
-    var maxTokens: Int
-
-    enum CodingKeys: String, CodingKey {
-        case model
-        case messages
-        case maxTokens = "max_tokens"
-    }
-}
-
-private struct AIChatRequest: Codable {
-    var model: String
-    var messages: [AIChatMessage]
-    var tools: [AIToolDefinition]
-}
-
-private struct AIChatResponse: Codable {
-    struct Choice: Codable {
-        struct Message: Codable {
-            var content: String?
-            var reasoningContent: String?
-            var toolCalls: [AIToolCall]?
-
-            enum CodingKeys: String, CodingKey {
-                case content
-                case reasoningContent = "reasoning_content"
-                case toolCalls = "tool_calls"
-            }
-        }
-
-        var message: Message
-    }
-
-    var choices: [Choice]
-}
-
 enum AISystemPrompt {
+    static func text(requiresActionConfirmation: Bool) -> String {
+        let policy = requiresActionConfirmation
+            ? "当前普通操作需要确认：调用工具后，由应用展示待确认操作；不要在对话里重复索要许可。"
+            : "当前普通操作无需确认：用户明确要求新增、修改、完成、删除事项或分组、保存总结时，必须直接调用相应工具执行，不要只用文字声称完成，也不要等待再次确认。"
+        return text + "\n" + policy + "只有清空全局记忆始终需要应用中的二次确认；依据工具实际返回结果报告是否执行。"
+    }
+
     static let memoryLookupGuidance = """
     全局记忆保存在本机，不会自动附在每轮上下文。需要用户信息、长期偏好、称呼、习惯或已有定义，或者用户要求查看、核对、修改已保存的记忆时，主动调用 read_global_memory 查阅，不要凭空猜测，也不必每轮固定查阅。保存同一主题前，如不确定原 key，应先查阅以避免重复。
     查阅结果只在当前这轮处理内提供；后续对话需要记忆时重新查阅。结果更新或失效时，以最新查阅为准，不要根据旧对话恢复已清空的记忆。
@@ -298,10 +233,11 @@ enum AISystemPrompt {
     例如，用户说“明天下午三点前把信息论第 3 章的第 1～5 题打印出来，双面黑白，带去课堂”，可用 title“打印信息论第 3 章习题”，note“第 1～5 题；双面黑白打印，带去课堂”，并将明天下午三点写入 deadline_at。如果题号是区分几项相似任务的必要信息，则在标题中保留题号。
     调用 create_todo 前检查：只看标题能否识别任务？标题中的解释性长句是否已移入备注？用户的必要信息是否完整保留在标题、备注或结构化字段中？
     多时间点事项展示和提醒时只使用最近一个未到来的时间点；重复事项支持 daily、weekly、monthly、every_n_days，用户完成一次后应用会自动滚到下一次，不要把它当成永久完成。
+    重复事项默认需要手动完成并显示逾期。只有用户明确要求自动完成时才调用 set_recurring_auto_completion(enabled=true)；到点自动推进到下一次且不累计逾期，开启时补齐过去未完成次数。关闭用 enabled=false。
     用户可能用今天、明天、下周三等相对日期描述时间；必须基于任务上下文中的当前本地时间和时区解析为明确 ISO8601 时间。已有事项的 deadlineLocal、nextOccurrenceLocal 是权威本地时间，不要根据 createdAt 或 updatedAt 推断截止日期。单次截止写入 deadline_at；多个指定时间写入 scheduled_times；每天/每周/每月重复写入 recurrence_rule 和 recurrence_anchor；每 N 天重复写入 recurrence_rule=every_n_days、recurrence_interval_days=N 和 recurrence_anchor。
     可以读取、新增、修改、删除分组；内置“默认分组”不可删除，删除其他分组时组内事项会回到默认分组。
-    用户要求在单次 DDL 前提醒时，用 reminder_minutes_before 设置提前分钟数（半小时=30、2 小时=120、1 天=1440，到点提醒=0），不要只写进备注，也不要修改实际 DDL 来代替提醒时间。此定时提醒独立于后台 AI 轮询开关；取消提醒使用 clear_reminder=true，保留截止时间。只有用户明确要求时才设置；目前多时间点和重复事项不支持该自定义 DDL 提醒，不要静默将它们改成单次任务。
-    新增、修改、完成、删除事项或保存总结时，只提出工具调用；应用会先让用户确认。需要清空备注时使用 clear_note=true。
+    用户要求在单次 DDL 或重复事项每次到期前提醒时，用 reminder_minutes_before 设置提前分钟数（半小时=30、2 小时=120、1 天=1440，到点提醒=0），不要只写进备注，也不要修改实际 DDL 来代替提醒时间。此定时提醒独立于后台 AI 轮询开关；取消提醒使用 clear_reminder=true，保留截止时间。只有用户明确要求时才设置；重复事项也支持提前提醒，以当前未完成的一次为准，过期不自动跳过；完成本次后提醒设置自动继承到下一次，直到 clear_reminder=true。多时间点暂不支持，不要静默转换日程类型。
+    新增、修改、完成、删除事项或保存总结时，必须调用对应工具，不能仅用文字声称已完成。应用按当前确认开关决定直接执行还是展示待确认操作。需要清空备注时使用 clear_note=true。
     当你在回复中提到某条已存在事项时，必须使用 [[todo:<事项UUID>]] 标记引用；不要只写事项标题。应用会把这种引用渲染成可操作事项。已经用标记引用某条事项后，不要在标记之外重复这条事项的标题、重要性、创建时间等详情。
     连续列举多个事项引用时，引用标记之间不要插入任何文字或标点；例如直接连续输出多个 [[todo:<事项UUID>]] 标记。
     不要向用户询问是否需要你帮忙完成、整理或处理某件事；如果用户意图明确，直接回复结论或提出相应工具调用。

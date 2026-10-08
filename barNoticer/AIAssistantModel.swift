@@ -288,7 +288,7 @@ final class AIAssistantModel: ObservableObject {
             let apiKey = apiKeyStore.readAPIKey()
             let executor = AIToolExecutor(modelContext: modelContext, memoryStore: memoryStore)
             var messages = AIAssistantRequestBuilder.makeMessages(
-                systemPrompt: AISystemPrompt.text,
+                systemPrompt: AISystemPrompt.text(requiresActionConfirmation: settings.requiresActionConfirmation),
                 inlineContext: makeInlineContext(),
                 conversation: conversation
             )
@@ -296,6 +296,7 @@ final class AIAssistantModel: ObservableObject {
             var readMemoryRevision: UUID?
             var handledToolNames: [String] = []
             var handledProposalCount = 0
+            var appliedProposalCount = 0
             var visibleResponse = ""
 
             for _ in 0..<maxToolRounds {
@@ -312,7 +313,7 @@ final class AIAssistantModel: ObservableObject {
 
                 guard !result.toolCalls.isEmpty else {
                     visibleResponse = sanitized.isEmpty
-                        ? AIVisibleResponse.fallbackText(toolNames: handledToolNames, proposalCount: handledProposalCount)
+                        ? AIVisibleResponse.fallbackText(toolNames: handledToolNames, proposalCount: proposals.count, appliedCount: appliedProposalCount)
                         : sanitized
                     break
                 }
@@ -324,7 +325,9 @@ final class AIAssistantModel: ObservableObject {
                     role: "assistant",
                     content: result.content,
                     reasoningContent: result.reasoningContent,
-                    toolCalls: result.toolCalls
+                    toolCalls: result.toolCalls,
+                    responseItems: result.responseItems,
+                    responseProviderID: result.responseProviderID
                 ))
 
                 // Keep lookup activity visible through the following network request,
@@ -354,6 +357,7 @@ final class AIAssistantModel: ObservableObject {
                             toolMessage = "已创建待确认操作：\(proposal.summary)"
                         } else {
                             toolMessage = try executor.apply(proposal).toolMessage
+                            appliedProposalCount += 1
                             hasAppliedActions = true
                         }
                         messages.append(AIChatMessage(role: "tool", content: toolMessage, toolCallID: call.id))
@@ -367,7 +371,7 @@ final class AIAssistantModel: ObservableObject {
             }
 
             if visibleResponse.isEmpty {
-                visibleResponse = AIVisibleResponse.fallbackText(toolNames: handledToolNames, proposalCount: handledProposalCount)
+                visibleResponse = AIVisibleResponse.fallbackText(toolNames: handledToolNames, proposalCount: proposals.count, appliedCount: appliedProposalCount)
             }
             if proposals.contains(where: \.requiresMandatoryConfirmation) {
                 visibleResponse = "清空全部全局记忆需要二次确认，目前尚未清空。请点击待确认操作继续。"

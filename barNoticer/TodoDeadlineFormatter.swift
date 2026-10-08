@@ -13,7 +13,10 @@ enum TodoDeadlineFormatter {
             return "下次 \(shortText(for: date, now: now)) · \(remainingText(until: date, now: now))"
         case .recurring:
             let rule = item.recurrenceRule?.title ?? "重复"
-            return "\(rule) · 下次 \(shortText(for: date, now: now)) · \(remainingText(until: date, now: now))"
+            if item.automaticallyCompletes {
+                return "\(rule) · 下次 \(shortText(for: date, now: now)) · 自动完成"
+            }
+            return "\(rule) · 本次 \(shortText(for: date, now: now)) · \(remainingText(until: date, now: now))"
         }
     }
 

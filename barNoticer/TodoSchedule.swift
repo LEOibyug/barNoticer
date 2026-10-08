@@ -106,7 +106,8 @@ enum TodoSchedulePolicy {
         recurrenceAnchor: Date?,
         lastCompletedOccurrenceAt: Date?,
         after now: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        automaticallyCompletes: Bool = false
     ) -> Date? {
         if let recurrenceRule, let recurrenceAnchor {
             return nextRecurringOccurrence(
@@ -114,7 +115,8 @@ enum TodoSchedulePolicy {
                 anchor: recurrenceAnchor,
                 lastCompletedOccurrenceAt: lastCompletedOccurrenceAt,
                 after: now,
-                calendar: calendar
+                calendar: calendar,
+                automaticallyCompletes: automaticallyCompletes
             )
         }
 
@@ -133,9 +135,12 @@ enum TodoSchedulePolicy {
         anchor: Date,
         lastCompletedOccurrenceAt: Date?,
         after now: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        automaticallyCompletes: Bool = false
     ) -> Date {
-        let lowerBound = max(now, lastCompletedOccurrenceAt ?? .distantPast)
+        // The current occurrence stays pending even when overdue. Only completion advances it.
+        let lowerBound = automaticallyCompletes ? max(now, lastCompletedOccurrenceAt ?? .distantPast)
+            : (lastCompletedOccurrenceAt ?? .distantPast)
         var occurrence = anchor
 
         while occurrence <= lowerBound {
@@ -143,6 +148,20 @@ enum TodoSchedulePolicy {
         }
 
         return occurrence
+    }
+
+    static func latestDueRecurringOccurrence(rule: TodoRecurrenceRule, anchor: Date,
+        lastCompletedOccurrenceAt: Date?, now: Date, calendar: Calendar = .current) -> Date? {
+        var occurrence = nextRecurringOccurrence(rule: rule, anchor: anchor,
+            lastCompletedOccurrenceAt: lastCompletedOccurrenceAt, after: now, calendar: calendar)
+        var latest: Date?
+        while occurrence <= now {
+            latest = occurrence
+            let next = addingOneInterval(rule: rule, to: occurrence, preservingDayFrom: anchor, calendar: calendar)
+            guard next > occurrence else { break }
+            occurrence = next
+        }
+        return latest
     }
 
     private static func addingOneInterval(

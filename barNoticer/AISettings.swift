@@ -11,6 +11,8 @@ struct AISettings: Equatable {
     static let shortcutModifiersKey = "AISettingsShortcutModifiers"
     static let requiresActionConfirmationKey = "AISettingsRequiresActionConfirmation"
 
+    var responseFormat: AIResponseFormat = .chatCompletions
+    var providerRoutes: [AIProviderConfiguration]?
     var baseURL: URL
     var model: String
     var shortcut: AIKeyboardShortcut
@@ -20,8 +22,10 @@ struct AISettings: Equatable {
         baseURL: URL = Self.defaultBaseURL,
         model: String = Self.defaultModel,
         shortcut: AIKeyboardShortcut = .default,
-        requiresActionConfirmation: Bool = true
+        requiresActionConfirmation: Bool = true,
+        responseFormat: AIResponseFormat = .chatCompletions
     ) {
+        self.responseFormat = responseFormat
         self.baseURL = baseURL
         self.model = model
         self.shortcut = shortcut
@@ -39,6 +43,15 @@ struct AISettings: Equatable {
             shortcut: storedShortcut ?? .default,
             requiresActionConfirmation: defaults.object(forKey: Self.requiresActionConfirmationKey) == nil ? true : defaults.bool(forKey: Self.requiresActionConfirmationKey)
         )
+        if defaults.data(forKey: AIProviderCollection.storageKey) != nil {
+            let collection = AIProviderCollection.load(from: defaults)
+            providerRoutes = collection.routes
+            if let active = collection.active {
+                baseURL = active.settings.baseURL
+                model = active.settings.model
+                responseFormat = active.responseFormat
+            }
+        }
     }
 
     var isValid: Bool {
@@ -46,7 +59,7 @@ struct AISettings: Equatable {
             return false
         }
 
-        return !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return baseURL.host != nil && !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var chatCompletionsURL: URL {
@@ -68,62 +81,75 @@ struct AISettingsDraft {
     private let defaults: UserDefaults
     private let keyStore: AIAPIKeyStore
     private var isLoading = false
-
-    var baseURLText: String {
-        didSet { saveIfLoaded() }
-    }
-    var model: String {
-        didSet { saveIfLoaded() }
-    }
-    var apiKey: String {
-        didSet { saveIfLoaded() }
-    }
-    var shortcut: AIKeyboardShortcut {
-        didSet { saveIfLoaded() }
-    }
-    var requiresActionConfirmation: Bool {
-        didSet { saveIfLoaded() }
-    }
+    var collection: AIProviderCollection
+    var editingID: UUID
+    var shortcut: AIKeyboardShortcut { didSet { saveIfLoaded() } }
+    var requiresActionConfirmation: Bool { didSet { saveIfLoaded() } }
 
     init(defaults: UserDefaults = .standard, keyStore: AIAPIKeyStore = .shared) {
         self.defaults = defaults
         self.keyStore = keyStore
         let settings = AISettings(defaults: defaults)
-        baseURLText = settings.baseURL.absoluteString
-        model = settings.model
-        apiKey = keyStore.readAPIKey()
+        collection = AIProviderCollection.load(from: defaults)
+        editingID = collection.activeID
         shortcut = settings.shortcut
         requiresActionConfirmation = settings.requiresActionConfirmation
     }
 
-    var settings: AISettings {
-        AISettings(
-            baseURL: URL(string: baseURLText.trimmingCharacters(in: .whitespacesAndNewlines)) ?? AISettings.defaultBaseURL,
-            model: model.trimmingCharacters(in: .whitespacesAndNewlines),
-            shortcut: shortcut,
-            requiresActionConfirmation: requiresActionConfirmation
-        )
+    var provider: AIProviderConfiguration {
+        get { collection.providers.first { $0.id == editingID } ?? collection.providers[0] }
+        set {
+            guard let index = collection.providers.firstIndex(where: { $0.id == editingID }) else { return }
+            collection.providers[index] = newValue
+            saveIfLoaded()
+        }
     }
+    var baseURLText: String { get { provider.baseURL } set { provider.baseURL = newValue } }
+    var model: String { get { provider.model } set { provider.model = newValue } }
+    var apiKey: String { get { provider.apiKey } set { provider.apiKey = newValue } }
+    var settings: AISettings { provider.settings }
+    var canTestConnection: Bool { provider.isReady }
 
-    var canTestConnection: Bool {
-        settings.isValid && !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    mutating func addProvider() {
+        let new = AIProviderConfiguration(name: "供应商 \(collection.providers.count + 1)")
+        collection.providers.append(new)
+        editingID = new.id
+        saveIfLoaded()
     }
+    mutating func removeProvider() {
+        guard collection.providers.count > 1 else { return }
+        collection.providers.removeAll { $0.id == editingID }
+        if collection.activeID == editingID { collection.activeID = collection.providers[0].id }
+        editingID = collection.providers[0].id
+        saveIfLoaded()
+    }
+    mutating func moveProvider(by offset: Int) {
+        guard let index = collection.providers.firstIndex(where: { $0.id == editingID }),
+              collection.providers.indices.contains(index + offset) else { return }
+        collection.providers.swapAt(index, index + offset)
+        saveIfLoaded()
+    }
+    mutating func setMode(_ mode: AIProviderMode) { collection.mode = mode; saveIfLoaded() }
+    mutating func setActive(_ id: UUID) { collection.activeID = id; saveIfLoaded() }
 
     mutating func reload() {
         isLoading = true
         let stored = AISettings(defaults: defaults)
-        baseURLText = stored.baseURL.absoluteString
-        model = stored.model
+        collection = AIProviderCollection.load(from: defaults)
+        if !collection.providers.contains(where: { $0.id == editingID }) { editingID = collection.activeID }
         shortcut = stored.shortcut
         requiresActionConfirmation = stored.requiresActionConfirmation
-        apiKey = keyStore.readAPIKey()
         isLoading = false
     }
 
     private func saveIfLoaded() {
         guard !isLoading else { return }
-        settings.save(to: defaults)
-        keyStore.saveAPIKey(apiKey)
+        collection.save(to: defaults)
+        var active = collection.active?.settings ?? AISettings()
+        active.shortcut = shortcut
+        active.requiresActionConfirmation = requiresActionConfirmation
+        keyStore.saveAPIKey(collection.active?.apiKey ?? "")
+        active.save(to: defaults)
     }
 }
 

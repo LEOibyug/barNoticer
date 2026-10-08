@@ -2,11 +2,12 @@ import SwiftUI
 
 struct TodoReminderEditor: View {
     @Binding var minutesBefore: Int?
+    var isRecurring = false
     @State private var unit = 1
 
     var body: some View {
         HStack(spacing: 8) {
-            Toggle("DDL 提前提醒", isOn: Binding(
+            Toggle(isRecurring ? "每次提前提醒" : "DDL 提前提醒", isOn: Binding(
                 get: { minutesBefore != nil },
                 set: { minutesBefore = $0 ? 30 : nil; unit = 1 }
             ))
@@ -40,7 +41,7 @@ struct TodoReminderEditor: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .font(.caption)
-        .help("定时提醒不受 AI 轮询开关影响；填 0 表示 DDL 到点提醒，最多提前 365 天。")
+        .help("定时提醒不受 AI 轮询开关影响；填 0 表示到点提醒，最多提前 365 天。重复事项完成本次后会自动沿用此设置。")
         .onAppear {
             if let minutes = minutesBefore, minutes > 0 {
                 unit = minutes % 1_440 == 0 ? 1_440 : (minutes % 60 == 0 ? 60 : 1)

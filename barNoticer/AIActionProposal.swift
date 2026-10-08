@@ -29,6 +29,7 @@ enum AIActionProposal: Equatable, Identifiable {
         reminderMinutesBefore: Int? = nil,
         clearsReminder: Bool = false
     )
+    case setRecurringAutoCompletion(id: UUID, enabled: Bool)
     case completeTodo(id: UUID)
     case deleteTodo(id: UUID)
     case createGroup(id: UUID = UUID(), name: String, colorHex: String)
@@ -39,7 +40,7 @@ enum AIActionProposal: Equatable, Identifiable {
 
     var id: UUID {
         switch self {
-        case let .clearGlobalMemory(id, _): return id
+        case let .clearGlobalMemory(id, _), let .setRecurringAutoCompletion(id, _): return id
         case let .createTodo(id, _, _, _, _, _, _, _, _, _), let .createGroup(id, _, _), let .saveDailySummary(id, _):
             return id
         case let .updateTodo(id, _, _, _, _, _, _, _, _, _, _, _, _, _), let .completeTodo(id), let .deleteTodo(id), let .updateGroup(id, _, _, _), let .deleteGroup(id):
@@ -64,6 +65,7 @@ enum AIActionProposal: Equatable, Identifiable {
 
     var referencedTodoID: UUID? {
         switch self {
+        case let .setRecurringAutoCompletion(id, _): return id
         case let .updateTodo(id, _, _, _, _, _, _, _, _, _, _, _, _, _), let .completeTodo(id), let .deleteTodo(id):
             return id
         case .createTodo, .createGroup, .updateGroup, .deleteGroup, .saveDailySummary, .clearGlobalMemory:
@@ -77,7 +79,7 @@ enum AIActionProposal: Equatable, Identifiable {
             return groupID
         case let .updateGroup(id, _, _, _), let .deleteGroup(id):
             return id
-        case .completeTodo, .deleteTodo, .createGroup, .saveDailySummary, .clearGlobalMemory:
+        case .setRecurringAutoCompletion, .completeTodo, .deleteTodo, .createGroup, .saveDailySummary, .clearGlobalMemory:
             return nil
         }
     }
@@ -86,13 +88,14 @@ enum AIActionProposal: Equatable, Identifiable {
         switch self {
         case let .createTodo(_, _, _, _, _, deadlineAt, _, _, _, _), let .updateTodo(_, _, _, _, _, deadlineAt, _, _, _, _, _, _, _, _):
             return deadlineAt
-        case .completeTodo, .deleteTodo, .createGroup, .updateGroup, .deleteGroup, .saveDailySummary, .clearGlobalMemory:
+        case .setRecurringAutoCompletion, .completeTodo, .deleteTodo, .createGroup, .updateGroup, .deleteGroup, .saveDailySummary, .clearGlobalMemory:
             return nil
         }
     }
 
     var summary: String {
         switch self {
+        case let .setRecurringAutoCompletion(_, enabled): return enabled ? "开启到点自动完成" : "关闭自动完成，改为手动完成"
         case .clearGlobalMemory: return "清空全部全局记忆（必须二次确认）"
         case let .createTodo(_, title, _, priority, _, _, _, _, _, reminderMinutes):
             let suffix = reminderMinutes.map { "；" + TodoScheduledReminder.label(minutes: $0) } ?? ""

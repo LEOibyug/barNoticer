@@ -100,7 +100,9 @@ final class ReminderHaloTests: XCTestCase {
     func testPreviewReminderAndAssistantReplyShowHaloBeforeContent() async throws {
         let fixture = try Fixture(reduceMotion: false)
         defer { fixture.close() }
-        let prior = Set(NSApp.windows.map(ObjectIdentifier.init))
+        let priorWindows = NSApp.windows
+        defer { withExtendedLifetime(priorWindows) {} }
+        let prior = Set(priorWindows.map(ObjectIdentifier.init))
         let triggers: [() -> Void] = [
             { fixture.notifications.post(name: ReminderSettings.previewDidChangeNotification, object: nil) },
             { fixture.presenter.present(decision: ReminderDecision(shouldRemind: true, message: "提醒",
@@ -119,7 +121,9 @@ final class ReminderHaloTests: XCTestCase {
             XCTAssertFalse(contentIsVisible(), "Content must not cover the initial halo")
             XCTAssertTrue(NSApp.windows.contains { !prior.contains(ObjectIdentifier($0)) && $0.isVisible
                 && ($0.contentView as? ReminderHaloView)?.isPreview == false })
-            try await Task.sleep(for: .seconds(1.1))
+            for _ in 0..<100 where !contentIsVisible() {
+                try await Task.sleep(for: .milliseconds(20))
+            }
             XCTAssertTrue(contentIsVisible(), "Content must appear after the halo")
             fixture.notifications.post(name: ReminderSettings.previewDidEndNotification, object: nil)
             try await Task.sleep(for: .milliseconds(350))

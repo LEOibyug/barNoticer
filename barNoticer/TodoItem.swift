@@ -11,10 +11,12 @@ final class TodoItem {
     var deadlineAt: Date?
     var reminderMinutesBefore: Int?
     var lastDeliveredReminderKey: String?
+    var deferredAutomaticReminderAt: Date?
     var scheduledTimesData: Data?
     var recurrenceRuleRawValue: String?
     var recurrenceAnchor: Date?
     var lastCompletedOccurrenceAt: Date?
+    var automaticallyCompletes: Bool = false
     var isCompleted: Bool
     var createdAt: Date
     var updatedAt: Date
@@ -82,13 +84,43 @@ final class TodoItem {
     }
 
     func completeCurrentOccurrence(now: Date = Date()) {
-        guard scheduleKind == .recurring, let occurrence = nextOccurrence(after: now.addingTimeInterval(-1)) else {
+        advanceAutomaticOccurrences(now: now)
+        guard scheduleKind == .recurring, let occurrence = pendingOccurrence() else {
             updateCompletion(true)
             return
         }
         lastCompletedOccurrenceAt = occurrence
         isCompleted = false
         updatedAt = Date()
+    }
+
+    func updateAutomaticCompletion(_ enabled: Bool, now: Date = Date()) {
+        // Persist any elapsed automatic occurrences before disabling the behavior.
+        advanceAutomaticOccurrences(now: now)
+        automaticallyCompletes = scheduleKind == .recurring && enabled
+        advanceAutomaticOccurrences(now: now)
+        updatedAt = now
+    }
+
+    @discardableResult
+    func advanceAutomaticOccurrences(now: Date = Date()) -> Bool {
+        guard automaticallyCompletes, !isCompleted, let rule = recurrenceRule, let anchor = recurrenceAnchor,
+              let latest = TodoSchedulePolicy.latestDueRecurringOccurrence(rule: rule, anchor: anchor,
+                lastCompletedOccurrenceAt: lastCompletedOccurrenceAt, now: now) else { return false }
+        // An editor or toggle may advance before the scheduler runs. Keep its due reminder.
+        if deferredAutomaticReminderAt == nil, let reminder = TodoScheduledReminder(item: self), reminder.fireDate <= now {
+            deferredAutomaticReminderAt = reminder.deadline
+        }
+        lastCompletedOccurrenceAt = latest
+        updatedAt = now
+        return true
+    }
+
+    /// Stored progress, without projecting automatic completion ahead of the local scheduler.
+    func pendingOccurrence() -> Date? {
+        TodoSchedulePolicy.nextOccurrence(deadlineAt: deadlineAt, scheduledTimes: scheduledTimes,
+            recurrenceRule: recurrenceRule, recurrenceAnchor: recurrenceAnchor,
+            lastCompletedOccurrenceAt: lastCompletedOccurrenceAt, after: .distantPast)
     }
 
     func updateGroup(_ groupID: UUID?) {
@@ -100,17 +132,22 @@ final class TodoItem {
         self.deadlineAt = deadlineAt
         if deadlineAt == nil { updateReminder(minutesBefore: nil) }
         if deadlineAt != nil {
+            deferredAutomaticReminderAt = nil
             scheduledTimesData = nil
             recurrenceRuleRawValue = nil
             recurrenceAnchor = nil
             lastCompletedOccurrenceAt = nil
+            automaticallyCompletes = false
         }
         updatedAt = Date()
     }
 
     func updateReminder(minutesBefore: Int?) {
         let value = minutesBefore.map { min(TodoScheduledReminder.maximumMinutes, max(0, $0)) }
-        if value != reminderMinutesBefore { lastDeliveredReminderKey = nil }
+        if value != reminderMinutesBefore {
+            lastDeliveredReminderKey = nil
+            deferredAutomaticReminderAt = nil
+        }
         reminderMinutesBefore = value
         updatedAt = Date()
     }
@@ -129,18 +166,22 @@ final class TodoItem {
             self.recurrenceRuleRawValue = nil
             self.recurrenceAnchor = nil
             self.lastCompletedOccurrenceAt = nil
+            automaticallyCompletes = false
             updatedAt = Date()
             return
         }
 
+        let recurrenceChanged = self.recurrenceRule != recurrenceRule || self.recurrenceAnchor != recurrenceAnchor
         self.deadlineAt = deadlineAt
-        if deadlineAt == nil || !scheduledTimes.isEmpty || recurrenceRule != nil {
-            updateReminder(minutesBefore: nil)
-        }
+        let supportsReminder = (recurrenceRule != nil && recurrenceAnchor != nil)
+            || (deadlineAt != nil && scheduledTimes.isEmpty && recurrenceRule == nil)
+        if !supportsReminder { updateReminder(minutesBefore: nil) }
         self.scheduledTimesData = scheduledTimes.isEmpty ? nil : try? JSONEncoder.iso8601Encoder.encode(scheduledTimes.sorted())
         self.recurrenceRuleRawValue = recurrenceRule?.rawValue
         self.recurrenceAnchor = recurrenceAnchor
-        if recurrenceRule == nil {
+        if recurrenceRule == nil || recurrenceAnchor == nil { automaticallyCompletes = false }
+        if recurrenceRule == nil || recurrenceChanged {
+            deferredAutomaticReminderAt = nil
             self.lastCompletedOccurrenceAt = nil
         }
         updatedAt = Date()
@@ -153,7 +194,8 @@ final class TodoItem {
             recurrenceRule: recurrenceRule,
             recurrenceAnchor: recurrenceAnchor,
             lastCompletedOccurrenceAt: lastCompletedOccurrenceAt,
-            after: now
+            after: now,
+            automaticallyCompletes: automaticallyCompletes && !isCompleted
         )
     }
 
@@ -172,6 +214,7 @@ final class TodoItem {
         recurrenceRuleRawValue = nil
         recurrenceAnchor = nil
         lastCompletedOccurrenceAt = nil
+        automaticallyCompletes = false
         updatedAt = Date()
     }
 
@@ -189,8 +232,10 @@ final class TodoItem {
         isCompleted: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
-        reminderMinutesBefore: Int? = nil
+        reminderMinutesBefore: Int? = nil,
+        automaticallyCompletes: Bool = false
     ) {
+        self.automaticallyCompletes = automaticallyCompletes && recurrenceRule != nil && recurrenceAnchor != nil
         self.id = id
         self.title = title
         self.note = note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? note : nil

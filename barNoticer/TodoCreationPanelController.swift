@@ -221,8 +221,8 @@ private struct TodoCreationPanelView: View {
             metadataRow
             controls
             TodoScheduleEditor(draft: $scheduleDraft, layout: .compact)
-            if scheduleDraft.kind == .singleDeadline {
-                TodoReminderEditor(minutesBefore: $scheduleDraft.reminderMinutesBefore)
+            if scheduleDraft.supportsReminder {
+                TodoReminderEditor(minutesBefore: $scheduleDraft.reminderMinutesBefore, isRecurring: scheduleDraft.kind == .recurring)
                     .frame(height: 30, alignment: .leading)
             }
             noteField
@@ -370,8 +370,10 @@ private struct TodoCreationPanelView: View {
             scheduledTimes: scheduledTimes,
             recurrenceRule: recurrenceRule,
             recurrenceAnchor: recurrenceAnchor,
-            reminderMinutesBefore: scheduleDraft.effectiveReminderMinutesBefore
+            reminderMinutesBefore: scheduleDraft.effectiveReminderMinutesBefore,
+            automaticallyCompletes: scheduleDraft.effectiveAutomaticCompletion
         )
+        item.advanceAutomaticOccurrences()
         modelContext.insert(item)
         do {
             try modelContext.save()

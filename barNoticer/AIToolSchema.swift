@@ -81,14 +81,14 @@ enum AIToolSchema {
         ),
         tool(
             name: "create_todo",
-            description: "提出新增待办事项。需要用户确认。",
+            description: "提出新增待办事项。应用按操作确认设置直接执行或等待确认，以工具返回结果为准。",
             properties: [
                 "title": .object(["type": .string("string"), "description": .string("简洁且能独立识别任务的标题：动作 + 对象 + 必要限定信息，通常 8～20 个汉字左右，非硬性限制。保留关键项目名、课程名、交付物或区分任务所需的范围；不截断必要名称，不照抄用户长句。背景、步骤和详细要求放入 note，时间安排等放入对应字段。")]),
                 "note": .object(["type": .string("string"), "description": .string("可选备注。完整保存从标题移出的背景、步骤、详细要求、验收标准、检查清单、链接、文件路径和补充限制，不遗漏或虚构用户要求。长输入通常应填写备注；无补充信息时可省略，不要仅重复标题。")]),
                 "priority": .object(["type": .string("string"), "enum": .array([.string("high"), .string("medium"), .string("low")])]),
                 "group_id": .object(["type": .string("string")]),
                 "deadline_at": .object(["type": .string("string"), "description": .string("ISO8601 单次截止时间。用户说今天/明天/下周三时，先结合当前日期时间解析成明确 ISO8601。")]),
-                "reminder_minutes_before": .object(["type": .string("integer"), "minimum": .number(0), "maximum": .number(525600), "description": .string("用户主动设置的 DDL 提前提醒分钟数，仅适用于单次 deadline_at；0 为到点提醒，30 为提前半小时，1440 为提前一天。不受 AI 轮询开关影响。未要求时省略。")]),
+                "reminder_minutes_before": .object(["type": .string("integer"), "minimum": .number(0), "maximum": .number(525600), "description": .string("用户主动设置的 DDL 提前提醒分钟数，适用于单次 deadline_at 或带 recurrence_anchor 的重复事项；0 为到点提醒，30 为提前半小时，1440 为提前一天。不受 AI 轮询开关影响。未要求时省略。")]),
                 "scheduled_times": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("一次性多个时间点，ISO8601 字符串数组。展示和提醒只使用最近一个未到来的时间点。")]),
                 "recurrence_rule": .object(["type": .string("string"), "enum": .array([.string("daily"), .string("weekly"), .string("monthly"), .string("every_n_days")]), "description": .string("重复事项规则。用户说每 N 天时使用 every_n_days，并同时填写 recurrence_interval_days。")]),
                 "recurrence_interval_days": .object(["type": .string("integer"), "minimum": .number(1), "description": .string("仅 recurrence_rule=every_n_days 时填写，表示每 N 天重复。")]),
@@ -98,7 +98,7 @@ enum AIToolSchema {
         ),
         tool(
             name: "update_todo",
-            description: "提出修改待办标题、重要性、分组或截止时间。需要用户确认。",
+            description: "提出修改待办标题、重要性、分组或截止时间。应用按操作确认设置直接执行或等待确认，以工具返回结果为准。",
             properties: [
                 "id": .object(["type": .string("string")]),
                 "title": .object(["type": .string("string"), "description": .string("修改事项标题。应短而具体，保留动作、对象和必要限定词；不能改成过度模糊的标题。")]),
@@ -106,7 +106,7 @@ enum AIToolSchema {
                 "priority": .object(["type": .string("string"), "enum": .array([.string("high"), .string("medium"), .string("low")])]),
                 "group_id": .object(["type": .string("string")]),
                 "deadline_at": .object(["type": .string("string"), "description": .string("ISO8601 单次截止时间")]),
-                "reminder_minutes_before": .object(["type": .string("integer"), "minimum": .number(0), "maximum": .number(525600), "description": .string("设置单次 DDL 的提前提醒分钟数；0 为到点提醒。省略则保留原设置。需要任务已有单次 DDL 或同时设置 deadline_at。")]),
+                "reminder_minutes_before": .object(["type": .string("integer"), "minimum": .number(0), "maximum": .number(525600), "description": .string("设置单次 DDL 或重复事项每次到期前的提醒分钟数；0 为到点提醒。省略则保留原设置。需要任务已有单次 DDL/周期计划或同时设置有效日程；周期提醒完成本次后自动继承。")]),
                 "clear_reminder": .object(["type": .string("boolean"), "description": .string("关闭该任务主动设置的定时提醒，保留 DDL。不能与 reminder_minutes_before 同时填写。")]),
                 "scheduled_times": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("一次性多个时间点，ISO8601 字符串数组。")]),
                 "recurrence_rule": .object(["type": .string("string"), "enum": .array([.string("daily"), .string("weekly"), .string("monthly"), .string("every_n_days")])]),
@@ -119,20 +119,26 @@ enum AIToolSchema {
             required: ["id"]
         ),
         tool(
+            name: "set_recurring_auto_completion",
+            description: "设置周期事项到点自动完成。仅当用户明确要求时开启；开启后补齐过期次数并进入下一次，不累计逾期，提醒设置保留。关闭后需要手动完成。遵循普通操作确认开关。",
+            properties: ["id": .object(["type": .string("string")]), "enabled": .object(["type": .string("boolean")])],
+            required: ["id", "enabled"]
+        ),
+        tool(
             name: "complete_todo",
-            description: "提出完成指定待办。需要用户确认。",
+            description: "提出完成指定待办。应用按操作确认设置直接执行或等待确认，以工具返回结果为准。",
             properties: ["id": .object(["type": .string("string")])],
             required: ["id"]
         ),
         tool(
             name: "delete_todo",
-            description: "提出删除指定待办。需要用户确认。",
+            description: "提出删除指定待办。应用按操作确认设置直接执行或等待确认，以工具返回结果为准。",
             properties: ["id": .object(["type": .string("string")])],
             required: ["id"]
         ),
         tool(
             name: "create_group",
-            description: "提出新增自定义分组。需要用户确认。",
+            description: "提出新增自定义分组。应用按操作确认设置直接执行或等待确认，以工具返回结果为准。",
             properties: [
                 "name": .object(["type": .string("string")]),
                 "color_hex": .object(["type": .string("string")])
@@ -141,7 +147,7 @@ enum AIToolSchema {
         ),
         tool(
             name: "update_group",
-            description: "提出修改自定义分组名称、颜色或排序。需要用户确认。",
+            description: "提出修改自定义分组名称、颜色或排序。应用按操作确认设置直接执行或等待确认，以工具返回结果为准。",
             properties: [
                 "id": .object(["type": .string("string")]),
                 "name": .object(["type": .string("string")]),
@@ -152,13 +158,13 @@ enum AIToolSchema {
         ),
         tool(
             name: "delete_group",
-            description: "提出删除自定义分组；组内事项会移动到默认分组。需要用户确认。",
+            description: "提出删除自定义分组；组内事项会移动到默认分组。应用按操作确认设置直接执行或等待确认，以工具返回结果为准。",
             properties: ["id": .object(["type": .string("string")])],
             required: ["id"]
         ),
         tool(
             name: "save_daily_summary",
-            description: "保存用户主动输入的当日总结。需要用户确认。",
+            description: "保存用户主动输入的当日总结。应用按操作确认设置直接执行或等待确认，以工具返回结果为准。",
             properties: ["content": .object(["type": .string("string")])],
             required: ["content"]
         )

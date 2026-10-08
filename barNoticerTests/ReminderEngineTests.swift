@@ -144,7 +144,8 @@ final class ReminderEngineTests: XCTestCase {
             client: AIClient(session: URLSession(configuration: sessionConfiguration)),
             apiKeyStore: keyStore,
             historyStore: ReminderHistoryStore(defaults: defaults),
-            logStore: logStore
+            logStore: logStore,
+            defaults: defaults
         )
 
         _ = await engine.decision(for: .aiPoll, settings: ReminderSettings(), now: Date(timeIntervalSince1970: 2_000_000))
@@ -176,7 +177,8 @@ final class ReminderEngineTests: XCTestCase {
         let engine = AIReminderEngine(
             modelContext: container.mainContext,
             client: AIClient(session: URLSession(configuration: .ephemeral)),
-            apiKeyStore: AIAPIKeyStore(defaults: defaults)
+            apiKeyStore: AIAPIKeyStore(defaults: defaults),
+            defaults: defaults
         )
 
         let decision = await engine.decision(for: .deadline(todoID: id, offset: .twelveHours), settings: ReminderSettings(), now: Date())

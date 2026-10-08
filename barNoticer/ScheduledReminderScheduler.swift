@@ -86,24 +86,32 @@ final class ScheduledReminderScheduler {
             scheduleRetry()
             return
         }
-        let pending = items.compactMap { item -> (TodoItem, TodoScheduledReminder, String)? in
-            guard let reminder = TodoScheduledReminder(item: item) else { return nil }
-            let key = reminder.key + ":" + item.title + ":" + (item.note ?? "") + ":" + settings.tone.rawValue
-            return (item, reminder, key)
-        }.sorted { $0.1.fireDate < $1.1.fireDate }
+        func pendingReminders() -> [(TodoItem, TodoScheduledReminder, String)] {
+            items.compactMap { item -> (TodoItem, TodoScheduledReminder, String)? in
+                guard let reminder = TodoScheduledReminder(item: item) else { return nil }
+                let key = reminder.key + ":" + item.title + ":" + (item.note ?? "") + ":" + settings.tone.rawValue
+                return (item, reminder, key)
+            }.sorted { $0.1.fireDate < $1.1.fireDate }
+        }
+        var pending = pendingReminders()
         let validKeys = Set(pending.map { $0.2 })
         preparedMessages = preparedMessages.filter { validKeys.contains($0.key) }
 
         var didFailPersistingDelivery = false
+        var failedDeliveryIDs = Set<UUID>()
         for (item, reminder, cacheKey) in pending where reminder.fireDate <= now {
             // Persist the occurrence key, so relaunching or another timer tick
             // cannot deliver the same configured reminder again.
             let previous = item.lastDeliveredReminderKey
+            let deferred = item.deferredAutomaticReminderAt
             item.lastDeliveredReminderKey = reminder.key
+            if deferred == reminder.deadline { item.deferredAutomaticReminderAt = nil }
             do { try modelContext.save() }
             catch {
                 item.lastDeliveredReminderKey = previous
+                item.deferredAutomaticReminderAt = deferred
                 didFailPersistingDelivery = true
+                failedDeliveryIDs.insert(item.id)
                 continue
             }
             let prepared = preparedMessages.removeValue(forKey: cacheKey)
@@ -111,11 +119,27 @@ final class ScheduledReminderScheduler {
             presenter.present(decision: decision, trigger: reminder.trigger, settings: settings, timestamp: now)
         }
 
-        if !didFailPersistingDelivery {
-            retryDelayIndex = 0
+        // Deliver a due reminder first, including zero-offset reminders, then advance.
+        // Even tasks without reminders participate in this local timer.
+        for item in items where item.automaticallyCompletes && !failedDeliveryIDs.contains(item.id) {
+            let previous = item.lastCompletedOccurrenceAt
+            let deferred = item.deferredAutomaticReminderAt
+            let updatedAt = item.updatedAt
+            guard item.advanceAutomaticOccurrences(now: now) else { continue }
+            do { try modelContext.save() }
+            catch {
+                item.lastCompletedOccurrenceAt = previous
+                item.deferredAutomaticReminderAt = deferred
+                item.updatedAt = updatedAt
+                didFailPersistingDelivery = true
+            }
         }
+        pending = pendingReminders()
+        if !didFailPersistingDelivery { retryDelayIndex = 0 }
 
-        let nextDate = pending.map { $0.1.fireDate }.first { $0 > now }
+        let nextAutomatic = items.filter { $0.automaticallyCompletes && !$0.isCompleted && $0.scheduleKind == .recurring }
+            .compactMap { $0.pendingOccurrence() }.min()
+        let nextDate = (pending.map { $0.1.fireDate } + [nextAutomatic].compactMap { $0 }).min()
         if let nextDate, !didFailPersistingDelivery {
             // 正常路径：单个 one-shot timer 指向最近一次未投递提醒。
             installTimer(at: nextDate)

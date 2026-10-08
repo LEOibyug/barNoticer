@@ -27,7 +27,7 @@ struct ReminderSettingsView: View {
     private var scheduledSection: some View {
         SettingsSection(
             title: "任务定时提醒",
-            footer: "在单次 DDL 任务的新建或设置界面选择提前多久提醒。由本地定时触发，不依赖 AI 判断；关闭 AI 主动提醒不影响这里的功能。"
+            footer: "在单次 DDL 或重复事项的新建或设置界面选择提前多久提醒。重复事项完成本次后会自动继承到下一次，直到关闭提醒。由本地定时触发，不依赖 AI 判断；关闭 AI 主动提醒不影响这里的功能。"
         ) {
             Toggle("使用 AI 编写定时提醒文案", isOn: binding(\.scheduledAIWordingEnabled))
         }

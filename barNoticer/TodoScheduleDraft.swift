@@ -12,6 +12,7 @@ struct TodoScheduleDraft {
     var customRecurrenceDays = 2
     var recurrenceAnchor = Date.now.addingTimeInterval(3_600)
     var reminderMinutesBefore: Int?
+    var automaticallyCompletes = false
 
     /// 打开编辑器时从模型读取的原始有效值；新建草稿没有基线。
     var baseline: Baseline?
@@ -19,6 +20,7 @@ struct TodoScheduleDraft {
     struct Baseline: Equatable {
         var schedule: TodoSchedulePayload
         var reminderMinutesBefore: Int?
+        var automaticallyCompletes: Bool = false
     }
 
     init() {}
@@ -42,7 +44,9 @@ struct TodoScheduleDraft {
             deadline = anchor
         }
         reminderMinutesBefore = item.reminderMinutesBefore
-        baseline = Baseline(schedule: payload, reminderMinutesBefore: item.reminderMinutesBefore)
+        automaticallyCompletes = item.automaticallyCompletes
+        baseline = Baseline(schedule: payload, reminderMinutesBefore: item.reminderMinutesBefore,
+            automaticallyCompletes: item.automaticallyCompletes)
     }
 
     var effectiveRecurrenceRule: TodoRecurrenceRule {
@@ -52,8 +56,12 @@ struct TodoScheduleDraft {
         return recurrenceRule
     }
 
+    var effectiveAutomaticCompletion: Bool { kind == .recurring && automaticallyCompletes }
+
+    var supportsReminder: Bool { kind == .singleDeadline || kind == .recurring }
+
     var effectiveReminderMinutesBefore: Int? {
-        kind == .singleDeadline ? reminderMinutesBefore : nil
+        supportsReminder ? reminderMinutesBefore : nil
     }
 
     /// 当前类型的有效日程值；类型与有效字段作为一个整体参与比较与提交。
@@ -74,6 +82,7 @@ struct TodoScheduleDraft {
         guard let baseline else { return true }
         return effectivePayload != baseline.schedule
             || effectiveReminderMinutesBefore != baseline.reminderMinutesBefore
+            || effectiveAutomaticCompletion != baseline.automaticallyCompletes
     }
 
     /// 编辑器至少展示两个时间点；已有三项及以上时全部展示、全部保存。
@@ -151,10 +160,7 @@ enum TodoScheduleCommitter {
         } catch {
             return .saveFailed(error.localizedDescription)
         }
-        draft.baseline = TodoScheduleDraft.Baseline(
-            schedule: TodoSchedulePayload(item: item),
-            reminderMinutesBefore: item.reminderMinutesBefore
-        )
+        draft = TodoScheduleDraft(item: item)
         return .saved
     }
 
@@ -171,6 +177,11 @@ enum TodoScheduleCommitter {
            item.reminderMinutesBefore != baseline.reminderMinutesBefore,
            draft.effectiveReminderMinutesBefore != item.reminderMinutesBefore {
             fields.append("提醒时间")
+        }
+        if draft.effectiveAutomaticCompletion != baseline.automaticallyCompletes,
+           item.automaticallyCompletes != baseline.automaticallyCompletes,
+           draft.effectiveAutomaticCompletion != item.automaticallyCompletes {
+            fields.append("自动完成")
         }
         return fields
     }
@@ -191,7 +202,17 @@ enum TodoScheduleCommitter {
             }
         }
 
-        if draft.effectiveReminderMinutesBefore != item.reminderMinutesBefore {
+        let autoWasEdited = draft.baseline.map {
+            draft.effectiveAutomaticCompletion != $0.automaticallyCompletes
+        } ?? true
+        if autoWasEdited, draft.effectiveAutomaticCompletion != item.automaticallyCompletes {
+            item.updateAutomaticCompletion(draft.effectiveAutomaticCompletion)
+        }
+
+        let reminderWasEdited = draft.baseline.map {
+            draft.effectiveReminderMinutesBefore != $0.reminderMinutesBefore
+        } ?? true
+        if reminderWasEdited, draft.effectiveReminderMinutesBefore != item.reminderMinutesBefore {
             item.updateReminder(minutesBefore: draft.effectiveReminderMinutesBefore)
         }
     }
