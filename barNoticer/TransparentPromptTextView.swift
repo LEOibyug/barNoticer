@@ -50,6 +50,7 @@ struct TransparentPromptEditor: NSViewRepresentable {
     var focusRequestID: UUID
     var onSubmit: () -> Void
     var onPasteImages: ((NSPasteboard) -> Bool)? = nil
+    var onEscape: (() -> Void)? = nil
 
     func makeNSView(context: Context) -> TransparentPromptField {
         let field = TransparentPromptField()
@@ -83,6 +84,7 @@ struct TransparentPromptEditor: NSViewRepresentable {
 
     func updateNSView(_ field: TransparentPromptField, context: Context) {
         (field.cell as? ImagePromptCell)?.imageEditor.onPasteImages = onPasteImages
+        context.coordinator.onEscape = onEscape
         field.isEditable = context.environment.isEnabled
         Self.synchronize(field, with: text)
         guard let window = field.window else { return }
@@ -109,19 +111,21 @@ struct TransparentPromptEditor: NSViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, isComposingText: $isComposingText, onSubmit: onSubmit)
+        Coordinator(text: $text, isComposingText: $isComposingText, onSubmit: onSubmit, onEscape: onEscape)
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         @Binding var text: String
         @Binding var isComposingText: Bool
         let onSubmit: () -> Void
+        var onEscape: (() -> Void)?
         private var handledFocusRequestID: UUID?
 
-        init(text: Binding<String>, isComposingText: Binding<Bool>, onSubmit: @escaping () -> Void) {
+        init(text: Binding<String>, isComposingText: Binding<Bool>, onSubmit: @escaping () -> Void, onEscape: (() -> Void)? = nil) {
             _text = text
             _isComposingText = isComposingText
             self.onSubmit = onSubmit
+            self.onEscape = onEscape
         }
 
         func shouldRequestFocus(_ id: UUID) -> Bool {
@@ -160,6 +164,10 @@ struct TransparentPromptEditor: NSViewRepresentable {
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             guard !textView.hasMarkedText() else { return false }
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)), let onEscape {
+                onEscape()
+                return true
+            }
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
                 onSubmit()
                 return true

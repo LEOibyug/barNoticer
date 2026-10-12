@@ -128,6 +128,21 @@ final class PromptCompositionTests: XCTestCase {
         XCTAssertTrue(editor.hasMarkedText())
     }
 
+    func testEscapeInNativeEditorInvokesActionButDefersDuringComposition() {
+        var escaped = 0
+        let coordinator = TransparentPromptEditor.Coordinator(
+            text: .constant("draft"), isComposingText: .constant(false), onSubmit: {},
+            onEscape: { escaped += 1 }
+        )
+        let editor = NSTextView()
+        let field = TransparentPromptField()
+        XCTAssertTrue(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.cancelOperation(_:))))
+        XCTAssertEqual(escaped, 1)
+        editor.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertFalse(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.cancelOperation(_:))))
+        XCTAssertEqual(escaped, 1)
+    }
+
     func testReturnDuringCompositionDoesNotSubmitPrompt() throws {
         var submitted = false
         let coordinator = TransparentPromptEditor.Coordinator(

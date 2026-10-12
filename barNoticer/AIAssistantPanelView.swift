@@ -8,7 +8,17 @@ struct AIAssistantPanelView: View {
     @ObservedObject var model: AIAssistantModel
     var close: () -> Void
     var newConversation: (() -> Void)? = nil
+    var escape: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private func handleEscape() {
+        guard !model.isComposingPromptText, !model.isChoosingImages,
+              model.memoryClearConfirmation == nil else { return }
+        if let escape { escape() }
+        else if model.isConversationEmpty { close() }
+        else if let newConversation { newConversation() }
+        else { model.startNewConversation() }
+    }
 
     private var hasVisibleResponse: Bool {
         AIVisibleResponse.hasVisibleContent(model.response)
@@ -62,7 +72,8 @@ struct AIAssistantPanelView: View {
                         isComposingText: $model.isComposingPromptText,
                         focusRequestID: model.focusRequestID,
                         onSubmit: model.submit,
-                        onPasteImages: model.pasteImages
+                        onPasteImages: model.pasteImages,
+                        onEscape: handleEscape
                     )
                     .disabled(model.state == .loading)
                     .opacity(model.progress.displayText.isEmpty ? 1 : 0)
@@ -193,9 +204,7 @@ struct AIAssistantPanelView: View {
         .onAppear {
             focusInput()
         }
-        .onExitCommand {
-            close()
-        }
+        .onExitCommand(perform: handleEscape)
         .alert("清空全部记忆？", isPresented: Binding(
             get: { model.memoryClearConfirmation != nil },
             set: { if !$0 { model.hideMemoryClearConfirmation() } }

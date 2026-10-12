@@ -216,6 +216,12 @@ final class AIAssistantModel: ObservableObject {
         proposals = []
     }
 
+    var isConversationEmpty: Bool {
+        conversation.messages.isEmpty && prompt.isEmpty && images.isEmpty
+            && response.isEmpty && proposals.isEmpty && state == .idle
+            && imageInputError == nil
+    }
+
     func startNewConversation() {
         cancelMemoryClearConfirmation()
         requestTask?.cancel()

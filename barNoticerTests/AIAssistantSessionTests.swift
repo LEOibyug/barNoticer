@@ -5,6 +5,72 @@ import XCTest
 
 @MainActor
 final class AIAssistantSessionTests: XCTestCase {
+    func testEscapeResetsConversationThenClosesEmptyWindow() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        fixture.model.prompt = "第一问"
+        fixture.model.submit()
+        try await waitForCompletion(fixture.model)
+        fixture.controller.show()
+        let priorSession = fixture.model.sessionID
+
+        fixture.controller.handleEscape()
+
+        XCTAssertTrue(fixture.controller.isPresented)
+        XCTAssertNotEqual(fixture.model.sessionID, priorSession)
+        XCTAssertTrue(fixture.model.conversation.messages.isEmpty)
+        XCTAssertTrue(fixture.model.prompt.isEmpty)
+        XCTAssertTrue(fixture.model.response.isEmpty)
+        let emptySession = fixture.model.sessionID
+
+        fixture.controller.handleEscape()
+
+        XCTAssertFalse(fixture.controller.isPresented)
+        XCTAssertEqual(fixture.model.sessionID, emptySession)
+    }
+
+    func testEscapeClearsDraftAndCancelsLoadingWithoutPublishingStaleReply() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        fixture.controller.show()
+        fixture.model.prompt = "尚未发送"
+        fixture.controller.handleEscape()
+        XCTAssertTrue(fixture.controller.isPresented)
+        XCTAssertTrue(fixture.model.prompt.isEmpty)
+
+        fixture.model.prompt = "正在发送"
+        fixture.model.submit()
+        XCTAssertEqual(fixture.model.state, .loading)
+        fixture.controller.handleEscape()
+        XCTAssertEqual(fixture.model.state, .idle)
+        XCTAssertTrue(fixture.controller.isPresented)
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertTrue(fixture.presenter.replies.isEmpty)
+        XCTAssertTrue(fixture.model.response.isEmpty)
+    }
+
+    func testNativeWindowEscapeUsesResetThenCloseAndImageDraftIsNotEmpty() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let image = NSImage(size: NSSize(width: 8, height: 8))
+        image.lockFocus()
+        NSColor.white.setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: 8, height: 8)).fill()
+        image.unlockFocus()
+        fixture.model.addImages([try AIImageAttachment(data: XCTUnwrap(image.tiffRepresentation), name: "图片")])
+        XCTAssertFalse(fixture.model.isConversationEmpty)
+        let previousWindows = NSApp.windows
+        fixture.controller.show()
+        let panel = try XCTUnwrap(NSApp.windows.first { window in
+            !previousWindows.contains(where: { $0 === window }) && window.isVisible
+        })
+        panel.cancelOperation(nil)
+        XCTAssertTrue(fixture.controller.isPresented)
+        XCTAssertTrue(fixture.model.images.isEmpty)
+        panel.cancelOperation(nil)
+        XCTAssertFalse(fixture.controller.isPresented)
+    }
+
     func testCloseAndReopenPreservesDraft() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }

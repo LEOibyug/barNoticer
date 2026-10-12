@@ -126,14 +126,10 @@ struct IslandSummaryView: View {
 
     private func header(activeCount: Int) -> some View {
         HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("待办岛")
-                    .font(.headline)
-                    .foregroundStyle(.white)
-                Text(activeCount == 0 ? "没有进行中的事项" : "\(activeCount) 项进行中")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(IslandSummaryStyle.secondaryTextOpacity))
-            }
+            Text("\(activeCount) 项进行中")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
+                .monospacedDigit()
 
             Spacer()
 

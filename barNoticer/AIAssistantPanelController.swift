@@ -88,21 +88,31 @@ final class AIAssistantPanelController {
         }
     }
 
+    func handleEscape() {
+        guard !model.isComposingPromptText, !model.isChoosingImages,
+              model.memoryClearConfirmation == nil else { return }
+        if model.isConversationEmpty { close() }
+        else { startNewConversation() }
+    }
+
     func startNewConversation() {
         replyPresenter.dismissAssistantReply()
         model.startNewConversation()
     }
 
     private func makePanel(model: AIAssistantModel) -> NSPanel {
-        AIAssistantPanelChrome.makePanel(contentView: NSHostingView(rootView: AIAssistantPanelView(
+        let panel = AIAssistantPanelChrome.makePanel(contentView: NSHostingView(rootView: AIAssistantPanelView(
             model: model,
             close: { [weak self] in self?.close() },
-            newConversation: { [weak self] in self?.startNewConversation() }
+            newConversation: { [weak self] in self?.startNewConversation() },
+            escape: { [weak self] in self?.handleEscape() }
         ))) { [weak self] in
             guard self?.model.isChoosingImages != true else { return }
             guard self?.model.memoryClearConfirmation == nil else { return }
             self?.close()
         }
+        (panel as? FocusableAssistantPanel)?.onEscape = { [weak self] in self?.handleEscape() }
+        return panel
     }
 
     /// 屏幕参数变化（外接、分辨率调整）后重新执行边界约束。
@@ -276,6 +286,13 @@ enum AIAssistantPanelChrome {
 
 private final class FocusableAssistantPanel: NSPanel {
     var onResignFocus: (() -> Void)?
+    var onEscape: (() -> Void)?
+
+    override func cancelOperation(_ sender: Any?) {
+        if (firstResponder as? NSTextView)?.hasMarkedText() == true { return }
+        if let onEscape { onEscape() }
+        else { super.cancelOperation(sender) }
+    }
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
