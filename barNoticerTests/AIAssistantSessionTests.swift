@@ -153,6 +153,28 @@ final class AIAssistantSessionTests: XCTestCase {
         }
     }
 
+    func testHiddenCreateIsPersistedAsActiveAndVisibleInIndependentContext() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("BackgroundCreate-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configuration = ModelConfiguration(url: directory.appendingPathComponent("store.sqlite"))
+        let fixture = try Fixture(confirmActions: false, configuration: configuration)
+        defer { fixture.cleanUp() }
+        SessionURLProtocol.responses = [Self.createTodoResponse, Self.replyResponse]
+        fixture.controller.show()
+        fixture.model.prompt = "添加任务"
+        fixture.model.submit()
+        fixture.controller.close()
+        try await waitForCompletion(fixture.model)
+        XCTAssertEqual(fixture.model.state, .ready)
+        XCTAssertEqual(fixture.presenter.replies.count, 1)
+        let reopened = try ModelContainer(for: TodoItem.self, TodoGroup.self, DailySummary.self, configurations: configuration)
+        let items = try reopened.mainContext.fetch(FetchDescriptor<TodoItem>())
+        XCTAssertEqual(items.map(\.title), ["后台任务"])
+        XCTAssertFalse(try XCTUnwrap(items.first).isCompleted)
+        XCTAssertTrue(fixture.model.proposals.isEmpty)
+    }
+
     func testPendingActionsSurviveCloseAndReopenUntilConfirmed() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
@@ -309,12 +331,16 @@ final class AIAssistantSessionTests: XCTestCase {
         let controller: AIAssistantPanelController
         let presenter = RecordingReplyPresenter()
 
-        init(confirmActions: Bool = true) throws {
+        init(confirmActions: Bool = true, configuration: ModelConfiguration? = nil) throws {
             defaults = UserDefaults(suiteName: suite)!
             AISettings(baseURL: URL(string: "https://example.com/v1")!, model: "test", requiresActionConfirmation: confirmActions).save(to: defaults)
             let keyStore = AIAPIKeyStore(defaults: defaults)
             keyStore.saveAPIKey("test-key")
-            container = try TestSupport.makeInMemoryContainer()
+            if let configuration {
+                container = try ModelContainer(for: TodoItem.self, TodoGroup.self, DailySummary.self, configurations: configuration)
+            } else {
+                container = try TestSupport.makeInMemoryContainer()
+            }
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [SessionURLProtocol.self]
             SessionURLProtocol.responses = []

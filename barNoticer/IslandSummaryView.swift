@@ -307,7 +307,7 @@ struct IslandSummaryView: View {
                         .frame(width: contentWidth, height: proxy.size.height, alignment: .topLeading)
                         .padding(.horizontal, 1)
                     }
-                    .scrollIndicators(.never)
+                    .scrollIndicators(.visible)
                 }
                 .transition(.asymmetric(
                     insertion: .opacity.combined(with: .move(edge: .trailing)),
@@ -341,7 +341,11 @@ struct IslandSummaryView: View {
     }
 
     private var footerText: String? {
-        "拖动改变分组顺序"
+        if mode == .wide, groupingMode != .priority,
+           IslandWideGroupLayoutPolicy.needsHorizontalScroll(groupCount: visibleDisplayGroups.count) {
+            return "共 \(visibleDisplayGroups.count) 个分组 · 左右滚动查看 · 拖动调整顺序"
+        }
+        return "拖动改变分组顺序"
     }
 
     private func islandGroupDragPreview(_ group: TodoGroup) -> some View {
