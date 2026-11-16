@@ -2,6 +2,7 @@ import SwiftUI
 
 enum AIAssistantPanelStyle {
     static let promptFieldHeight: CGFloat = 28
+    static let activityHeight: CGFloat = 54
 }
 
 struct AIAssistantPanelView: View {
@@ -58,26 +59,15 @@ struct AIAssistantPanelView: View {
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(.secondary)
 
-                ZStack(alignment: .leading) {
-                    if !model.progress.displayText.isEmpty {
-                        Text(model.progress.displayText)
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(.primary)
-                            .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98)))
-                            .allowsHitTesting(false)
-                    }
-
-                    TransparentPromptEditor(
-                        text: $model.prompt,
-                        isComposingText: $model.isComposingPromptText,
-                        focusRequestID: model.focusRequestID,
-                        onSubmit: model.submit,
-                        onPasteImages: model.pasteImages,
-                        onEscape: handleEscape
-                    )
-                    .disabled(model.state == .loading)
-                    .opacity(model.progress.displayText.isEmpty ? 1 : 0)
-                }
+                TransparentPromptEditor(
+                    text: $model.prompt,
+                    isComposingText: $model.isComposingPromptText,
+                    focusRequestID: model.focusRequestID,
+                    onSubmit: model.submit,
+                    onPasteImages: model.pasteImages,
+                    onEscape: handleEscape
+                )
+                .disabled(model.state == .loading)
                 .frame(height: AIAssistantPanelStyle.promptFieldHeight)
 
                 Button(action: model.chooseImages) {
@@ -103,7 +93,6 @@ struct AIAssistantPanelView: View {
             .padding(.horizontal, 13)
             .padding(.vertical, 9)
             .background(.fill.quinary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.progress)
 
             if !model.images.isEmpty {
                 HStack(spacing: 10) {
@@ -143,34 +132,50 @@ struct AIAssistantPanelView: View {
                     .foregroundStyle(.red)
             }
 
+            if model.state == .loading || !model.activityLines.isEmpty {
+                AIAssistantActivityView(model: model)
+            }
+
+            if hasVisibleResponse && model.hasSummaryPreview {
+                Divider()
+                AIAssistantResponseView(model: model)
+            }
+
             if !model.proposals.isEmpty {
+                let summariesOnly = model.proposals.allSatisfy { proposal in
+                    if case .saveSummary = proposal { return true }
+                    return false
+                }
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
-                        Text("待确认操作")
+                        Text(summariesOnly ? "保存确认" : "待确认操作")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
 
                         Spacer()
 
-                        Button("全部忽略") {
-                            model.dismissAllProposals()
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                        if !summariesOnly {
+                            Button("全部忽略") {
+                                model.dismissAllProposals()
+                            }
+                            .disabled(model.state == .loading)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
 
-                        Button("全部执行") {
-                            model.applyAllProposals()
+                            Button("全部执行") {
+                                model.applyAllProposals()
+                            }
+                            .disabled(model.state == .loading)
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
                         }
-                        .disabled(model.state == .loading)
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
                     }
 
                     // 多条待确认操作使用独立受限滚动区，底部操作始终可达。
                     ScrollView {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(model.proposals) { proposal in
-                                AIProposalRow(proposal: proposal, model: model)
+                                AIProposalRow(proposal: proposal, sessionID: model.sessionID, model: model)
                             }
                         }
                     }
@@ -179,10 +184,9 @@ struct AIAssistantPanelView: View {
                 }
             }
 
-            if hasVisibleResponse {
+            if hasVisibleResponse && !model.hasSummaryPreview {
                 Divider()
                 AIAssistantResponseView(model: model)
-                    .id(model.response)
             }
 
             if case let .failed(message) = model.state {
@@ -199,7 +203,7 @@ struct AIAssistantPanelView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: AIAssistantPanelChrome.cornerRadius, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: AIAssistantPanelChrome.cornerRadius, style: .continuous)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.6), lineWidth: 1)
+                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
         }
         .onAppear {
             focusInput()
@@ -223,19 +227,82 @@ struct AIAssistantPanelView: View {
     }
 }
 
+private struct AIAssistantActivityView: View {
+    @ObservedObject var model: AIAssistantModel
+
+    private var lines: [String] {
+        var lines = model.activityLines
+        if model.state == .loading {
+            let status = model.progress.displayText
+            if !status.isEmpty, lines.last != status {
+                lines.append(status)
+            } else if lines.isEmpty {
+                lines.append("正在等待模型回复…")
+            }
+        }
+        return lines
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(lines.indices, id: \.self) { index in
+                        Text(lines[index])
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    Color.clear
+                        .frame(height: 0)
+                        .id("activity-end")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .padding(.horizontal, 1)
+            }
+            .frame(height: AIAssistantPanelStyle.activityHeight)
+            .scrollIndicators(.automatic)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("模型与工具活动")
+            .onAppear { proxy.scrollTo("activity-end", anchor: .bottom) }
+            .onChange(of: lines) { _, _ in
+                proxy.scrollTo("activity-end", anchor: .bottom)
+            }
+        }
+    }
+}
+
 private struct AIAssistantResponseView: View {
     @ObservedObject var model: AIAssistantModel
 
     var body: some View {
-        ScrollView {
-            AIAssistantMessageContent(text: model.response, model: model)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(1)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Group {
+                        if model.hasSummaryPreview {
+                            Text(model.response)
+                                .textSelection(.enabled)
+                        } else {
+                            AIAssistantMessageContent(text: model.response, model: model)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .padding(1)
+                    Color.clear
+                        .frame(height: 0)
+                        .id("response-end")
+                }
+            }
+            .frame(minHeight: 44, maxHeight: 170)
+            .scrollIndicators(.automatic)
+            .onAppear { proxy.scrollTo("response-end", anchor: .bottom) }
+            .onChange(of: model.response) { _, _ in
+                proxy.scrollTo("response-end", anchor: .bottom)
+            }
         }
-        .frame(maxHeight: 170)
-        .scrollIndicators(.automatic)
         .padding(12)
-        .background(.fill.quinary.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(.fill.quinary.opacity(0.4), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
@@ -289,6 +356,7 @@ private struct AITodoReferenceButton: View {
 
 private struct AIProposalRow: View {
     let proposal: AIActionProposal
+    let sessionID: UUID
     @ObservedObject var model: AIAssistantModel
 
     var body: some View {
@@ -300,11 +368,17 @@ private struct AIProposalRow: View {
 
                 if let todoID = proposal.referencedTodoID {
                     AITodoReferenceCard(todo: model.referencedTodo(id: todoID))
-                    if let reminderChange = proposal.reminderChangeSummary {
-                        Text(reminderChange)
+                    if let changeSummary = proposal.changeSummary {
+                        Text(changeSummary)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                } else if case let .saveSummary(_, title, start, end, _) = proposal {
+                    Text(title)
+                        .font(.subheadline.weight(.medium))
+                    Text(SavedSummary.periodDescription(start: start, end: end))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 } else {
                     Text(proposal.summary)
                         .font(.subheadline.weight(.medium))
@@ -315,14 +389,15 @@ private struct AIProposalRow: View {
 
             Spacer(minLength: 4)
 
-            Button("忽略") {
-                model.dismiss(proposal)
+            Button(isSummary ? "不保存" : "忽略") {
+                model.dismiss(proposal, sessionID: sessionID)
             }
+            .disabled(model.state == .loading)
             .buttonStyle(.bordered)
             .controlSize(.small)
 
-            Button(proposal.requiresMandatoryConfirmation ? "清空记忆…" : "执行") {
-                model.apply(proposal)
+            Button(actionTitle) {
+                model.apply(proposal, sessionID: sessionID)
             }
             .disabled(model.state == .loading)
             .buttonStyle(.borderedProminent)
@@ -330,6 +405,19 @@ private struct AIProposalRow: View {
         }
         .padding(10)
         .background(.fill.quinary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var isSummary: Bool {
+        if case .saveSummary = proposal { return true }
+        return false
+    }
+
+    private var actionTitle: String {
+        switch proposal {
+        case .saveSummary: return "保存总结"
+        case .clearGlobalMemory: return "清空记忆…"
+        default: return "执行"
+        }
     }
 
     private var proposalTitle: String {
@@ -340,7 +428,7 @@ private struct AIProposalRow: View {
             return "完成事项"
         case .deleteTodo:
             return "删除事项"
-        case .updateTodo, .setRecurringAutoCompletion:
+        case .updateTodo:
             return "修改事项"
         case .createTodo:
             return "新增事项"
@@ -350,7 +438,7 @@ private struct AIProposalRow: View {
             return "修改分组"
         case .deleteGroup:
             return "删除分组"
-        case .saveDailySummary:
+        case .saveSummary:
             return "保存总结"
         }
     }

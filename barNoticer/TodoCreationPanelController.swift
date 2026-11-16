@@ -4,14 +4,26 @@ import SwiftData
 import SwiftUI
 
 @MainActor
-final class TodoCreationPanelController {
+final class TodoCreationPanelController: NSObject {
     private let modelContext: ModelContext
     private var panel: NSPanel?
     private var presentationGeneration = 0
     private var contentHeight: CGFloat = TodoCreationPanelChrome.baseHeight
+    private var presentationScreenNumber: NSNumber?
+    private var isClosing = false
 
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
+        super.init()
+        NotificationCenter.default.addObserver(self, selector: #selector(screenParametersChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(screenParametersChanged), name: IslandLayoutSettings.didChangeNotification, object: nil)
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        Task { @MainActor [panel] in
+            panel?.orderOut(nil)
+        }
     }
 
     func toggle() {
@@ -26,26 +38,47 @@ final class TodoCreationPanelController {
         let panel = panel ?? makePanel()
         self.panel = panel
         presentationGeneration += 1
+        let generation = presentationGeneration
+        isClosing = false
+        let screen = ScreenTargeting.currentPointerScreen()
+        presentationScreenNumber = ScreenTargeting.screenNumber(of: screen)
         applyFrame(animated: false)
+        let expandedFrame = panel.frame
+        if !MotionPreferences.reduceMotion {
+            panel.setFrame(TodoCreationPanelChrome.collapsedFrame(for: expandedFrame), display: true)
+        }
         panel.alphaValue = 0
+        NotchPopupPresence.setVisible(true, owner: self)
         panel.makeKeyAndOrderFront(nil)
 
-        NSAnimationContext.runAnimation(duration: 0.16, timing: CAMediaTimingFunction(name: .easeOut)) {
+        NSAnimationContext.runAnimation(duration: 0.22, timing: CAMediaTimingFunction(name: .easeOut)) {
+            panel.animator().setFrame(expandedFrame, display: true)
             panel.animator().alphaValue = 1
+        } completion: { [weak self, weak panel] in
+            Task { @MainActor [weak self, weak panel] in
+                guard let self, let panel, self.presentationGeneration == generation, !self.isClosing else { return }
+                self.setContentHeight(self.contentHeight, on: panel, animated: false)
+            }
         }
     }
 
     func close() {
-        guard let panel else { return }
+        guard let panel, panel.isVisible, !isClosing else { return }
+        isClosing = true
         presentationGeneration += 1
         let generation = presentationGeneration
         // 关闭动画期间重新打开时，旧 completion 不得再隐藏新窗口。
-        NSAnimationContext.runAnimation(duration: 0.12, timing: CAMediaTimingFunction(name: .easeIn)) {
+        NSAnimationContext.runAnimation(duration: 0.14, timing: CAMediaTimingFunction(name: .easeIn)) {
+            if !MotionPreferences.reduceMotion {
+                panel.animator().setFrame(TodoCreationPanelChrome.collapsedFrame(for: panel.frame), display: true)
+            }
             panel.animator().alphaValue = 0
         } completion: { [weak self, weak panel] in
             Task { @MainActor [weak self, weak panel] in
-                guard self?.presentationGeneration == generation, let panel else { return }
+                guard let self, self.presentationGeneration == generation, let panel else { return }
                 panel.orderOut(nil)
+                self.isClosing = false
+                NotchPopupPresence.setVisible(false, owner: self)
             }
         }
     }
@@ -78,7 +111,7 @@ final class TodoCreationPanelController {
             self.setContentHeight(height, on: panel, animated: true)
         }) { [weak self] in
             self?.close()
-        })
+        }.environment(\.modelContext, modelContext))
         hostingView.wantsLayer = true
         hostingView.layer?.masksToBounds = true
         hostingView.layer?.cornerRadius = TodoCreationPanelChrome.cornerRadius
@@ -88,36 +121,30 @@ final class TodoCreationPanelController {
         return panel
     }
 
-    private func applyFrame(animated: Bool) {
-        guard let panel else { return }
-        setContentHeight(contentHeight, on: panel, animated: animated, reposition: true)
+    @objc private func screenParametersChanged() {
+        guard panel?.isVisible == true, !isClosing else { return }
+        applyFrame(animated: false)
     }
 
-    /// 内容高度变化时按同一锚点（底边）向上扩展；四边限制在屏幕可用区域内。
-    private func setContentHeight(_ height: CGFloat, on panel: NSPanel, animated: Bool, reposition: Bool = false) {
-        let screenFrame = (panel.screen ?? NSScreen.main)?.visibleFrame
-            ?? CGRect(x: 0, y: 0, width: 1_280, height: 800)
-        let margin: CGFloat = 12
-        let clampedHeight = min(max(height, 160), screenFrame.height - margin * 2)
-        let width = min(TodoCreationPanelChrome.baseSize.width, screenFrame.width - margin * 2)
+    private func applyFrame(animated: Bool) {
+        guard let panel else { return }
+        setContentHeight(contentHeight, on: panel, animated: animated)
+    }
 
-        // 首次定位：水平居中，底边位于可见高度 22% 处；之后高度变化保持底边锚点。
-        let current = panel.frame
-        let bottom: CGFloat
-        if reposition || current.width == 0 {
-            bottom = screenFrame.minY + screenFrame.height * 0.22
-        } else {
-            bottom = current.minY
-        }
-
-        let frame = CGRect(
-            x: min(max(screenFrame.midX - width / 2, screenFrame.minX + margin), screenFrame.maxX - margin - width),
-            y: min(max(bottom, screenFrame.minY + margin), screenFrame.maxY - margin - clampedHeight),
-            width: width,
-            height: clampedHeight
+    /// Keep the notch-side top edge fixed as schedule fields expand downward.
+    private func setContentHeight(_ height: CGFloat, on panel: NSPanel, animated: Bool) {
+        contentHeight = height
+        guard !isClosing else { return }
+        let screen = ScreenTargeting.resolvedScreen(pinnedNumber: &presentationScreenNumber)
+        let fallback = CGRect(x: 0, y: 0, width: 1_280, height: 800)
+        let frame = TodoCreationPanelChrome.frame(
+            contentHeight: height,
+            screenFrame: screen?.frame ?? fallback,
+            visibleFrame: screen?.visibleFrame ?? fallback,
+            safeAreaTopInset: screen?.safeAreaInsets.top ?? 0,
+            settings: IslandLayoutSettings(defaults: .standard)
         )
 
-        contentHeight = clampedHeight
         if animated, panel.isVisible {
             NSAnimationContext.runAnimation(duration: 0.2, timing: CAMediaTimingFunction(name: .easeInEaseOut)) {
                 panel.animator().setFrame(frame, display: true)
@@ -131,7 +158,34 @@ final class TodoCreationPanelController {
 enum TodoCreationPanelChrome {
     static let baseSize = CGSize(width: 640, height: 300)
     static let baseHeight: CGFloat = 300
-    static let cornerRadius: CGFloat = 18
+    static let cornerRadius: CGFloat = 24
+
+    static func frame(
+        contentHeight: CGFloat,
+        screenFrame: CGRect,
+        visibleFrame: CGRect,
+        safeAreaTopInset: CGFloat,
+        settings: IslandLayoutSettings
+    ) -> CGRect {
+        let margin = min(12, min(visibleFrame.width, visibleFrame.height) / 4)
+        let available = visibleFrame.insetBy(dx: margin, dy: margin)
+        let hotZone = settings.hotZoneFrame(in: screenFrame)
+        let safeTop = min(available.maxY, screenFrame.maxY - safeAreaTopInset - 8)
+        let top = min(safeTop, max(hotZone.minY - 8, available.minY + min(160, available.height)))
+        let width = min(baseSize.width, available.width)
+        let height = min(max(contentHeight, 160), top - available.minY)
+        return CGRect(
+            x: min(max(hotZone.midX - width / 2, available.minX), available.maxX - width),
+            y: top - height,
+            width: width,
+            height: height
+        )
+    }
+
+    static func collapsedFrame(for frame: CGRect) -> CGRect {
+        let height = min(48, frame.height)
+        return CGRect(x: frame.minX, y: frame.maxY - height, width: frame.width, height: height)
+    }
 }
 
 private final class FocusableTodoCreationPanel: NSPanel {
@@ -178,6 +232,7 @@ private struct TodoCreationPanelView: View {
     @State private var scheduleDraft = TodoScheduleDraft()
     @State private var saveErrorText: String?
     @FocusState private var isTitleFocused: Bool
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     private var groups: [TodoGroup] {
         TodoGroupResolver.normalizedGroups(storedGroups)
@@ -190,7 +245,8 @@ private struct TodoCreationPanelView: View {
     var body: some View {
         ScrollView {
             content
-                .padding(18)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(20)
                 .frame(maxWidth: TodoCreationPanelChrome.baseSize.width, alignment: .topLeading)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 .onGeometryChange(for: CGFloat.self) { proxy in
@@ -199,11 +255,19 @@ private struct TodoCreationPanelView: View {
                     onContentHeightChange(height)
                 }
         }
-        .scrollIndicators(.never)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: TodoCreationPanelChrome.cornerRadius, style: .continuous))
+        .scrollIndicators(.automatic)
+        .background {
+            if reduceTransparency {
+                RoundedRectangle(cornerRadius: TodoCreationPanelChrome.cornerRadius, style: .continuous)
+                    .fill(Color(nsColor: .windowBackgroundColor))
+            } else {
+                RoundedRectangle(cornerRadius: TodoCreationPanelChrome.cornerRadius, style: .continuous)
+                    .fill(.regularMaterial)
+            }
+        }
         .overlay {
             RoundedRectangle(cornerRadius: TodoCreationPanelChrome.cornerRadius, style: .continuous)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.6), lineWidth: 1)
+                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.45), lineWidth: 0.5)
         }
         .onAppear {
             groupID = groups.first?.id ?? TodoGroup.defaultGroupID
@@ -219,11 +283,14 @@ private struct TodoCreationPanelView: View {
             header
             titleField
             metadataRow
-            controls
-            TodoScheduleEditor(draft: $scheduleDraft, layout: .compact)
-            if scheduleDraft.supportsReminder {
-                TodoReminderEditor(minutesBefore: $scheduleDraft.reminderMinutesBefore, isRecurring: scheduleDraft.kind == .recurring)
-                    .frame(height: 30, alignment: .leading)
+            Divider()
+            VStack(alignment: .leading, spacing: 10) {
+                controls
+                TodoScheduleEditor(draft: $scheduleDraft, layout: .compact)
+                if scheduleDraft.supportsReminder {
+                    TodoReminderEditor(minutesBefore: $scheduleDraft.reminderMinutesBefore, isRecurring: scheduleDraft.kind == .recurring)
+                        .frame(height: 30, alignment: .leading)
+                }
             }
             noteField
             if let saveErrorText {
@@ -232,6 +299,7 @@ private struct TodoCreationPanelView: View {
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            footer
         }
     }
 
@@ -246,13 +314,19 @@ private struct TodoCreationPanelView: View {
             Button {
                 close()
             } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 17, weight: .semibold))
-                    .symbolRenderingMode(.hierarchical)
+                HStack(spacing: 6) {
+                    Text("esc")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .padding(7)
+                .background(.quinary, in: Capsule())
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .help("关闭")
+            .accessibilityLabel("关闭")
+            .help("关闭（Esc）")
         }
     }
 
@@ -273,25 +347,37 @@ private struct TodoCreationPanelView: View {
     }
 
     private var metadataRow: some View {
-        HStack(spacing: 10) {
-            Picker("重要性", selection: $priority) {
-                ForEach(TodoPriority.allCases) { priority in
-                    Label(priority.title, systemImage: priority.systemImage)
-                        .tag(priority)
-                }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                priorityPicker
+                groupPicker
+                Spacer(minLength: 0)
             }
-            .pickerStyle(.segmented)
-            .frame(width: 178)
-
-            Picker("分组", selection: $groupID) {
-                ForEach(groups) { group in
-                    Text(group.name).tag(group.id)
-                }
+            VStack(alignment: .leading, spacing: 8) {
+                priorityPicker
+                groupPicker
             }
-            .frame(width: 140)
-
-            Spacer(minLength: 0)
         }
+    }
+
+    private var priorityPicker: some View {
+        Picker("重要性", selection: $priority) {
+            ForEach(TodoPriority.allCases) { priority in
+                Label(priority.title, systemImage: priority.systemImage)
+                    .tag(priority)
+            }
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 178)
+    }
+
+    private var groupPicker: some View {
+        Picker("分组", selection: $groupID) {
+            ForEach(groups) { group in
+                Text(group.name).tag(group.id)
+            }
+        }
+        .frame(maxWidth: 140)
     }
 
     private var noteField: some View {
@@ -328,16 +414,29 @@ private struct TodoCreationPanelView: View {
             }
             .pickerStyle(.menu)
             .fixedSize()
+            Spacer(minLength: 0)
+        }
+        .controlSize(.small)
+    }
 
-            Spacer()
-
+    private var footer: some View {
+        HStack {
+            Spacer(minLength: 0)
             Button {
                 submit()
             } label: {
-                Label("添加", systemImage: "return")
+                HStack(spacing: 8) {
+                    Text("添加")
+                    Text("⌘↩")
+                        .font(.system(size: 11, weight: .medium))
+                        .opacity(0.8)
+                }
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+            .help("添加（标题中按 Return，或 ⌘Return）")
             .disabled(trimmedTitle.isEmpty)
+            .accessibilityLabel("添加")
             .keyboardShortcut(.return, modifiers: .command)
         }
     }

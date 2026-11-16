@@ -99,6 +99,24 @@ struct AIProviderSettingsView: View {
                     }
                 }
             }
+            if draft.provider.responseFormat != .anthropic {
+                field("推理强度") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Picker("推理强度", selection: providerBinding(\.reasoningEffort)) {
+                            Text("供应商默认（不发送）").tag(nil as AIReasoningEffort?)
+                            ForEach(AIReasoningEffort.allCases) { effort in
+                                Text(effort.rawValue).tag(Optional(effort))
+                            }
+                        }.labelsHidden()
+                        Text(draft.provider.responseFormat == .responses
+                            ? "Responses 使用 reasoning.effort，并请求自动推理摘要（none 除外）；仅展示实际返回的摘要。"
+                            : "Chat Completions 使用 reasoning_effort；默认不发送此参数。")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("支持的强度取决于模型和供应商；不支持的参数可能导致请求失败。none 与默认不发送不同。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
             field("模型列表") {
                 HStack {
                     if isDiscovering { ProgressView().controlSize(.small) }

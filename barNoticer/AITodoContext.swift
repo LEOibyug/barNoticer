@@ -13,6 +13,7 @@ struct AITodoItemSnapshot: Equatable, Identifiable, Codable {
     let scheduledTimes: [Date]
     let recurrenceRule: TodoRecurrenceRule?
     let recurrenceAnchor: Date?
+    var lastCompletedOccurrenceAt: Date?
     let nextOccurrenceAt: Date?
     let scheduleKind: TodoScheduleKind
     let isCompleted: Bool
@@ -45,7 +46,7 @@ struct AITodoSnapshot: Equatable {
     let activeByGroup: [AITodoGroupItemsSnapshot]
     let completed: [AITodoItemSnapshot]
     let groups: [AITodoGroupSnapshot]
-    let dailySummaries: [DailySummarySnapshot]
+    let summaries: [SavedSummary]
     let stats: AITodoStats
 }
 
@@ -55,7 +56,7 @@ struct AITodoInlineContext: Equatable {
 
 @MainActor
 enum AITodoContext {
-    static func snapshot(items: [TodoItem], groups: [TodoGroup] = [], dailySummaries: [DailySummary] = [], now: Date = Date()) -> AITodoSnapshot {
+    static func snapshot(items: [TodoItem], groups: [TodoGroup] = [], summaries: [SavedSummary] = [], now: Date = Date()) -> AITodoSnapshot {
         let normalizedGroups = TodoGroupResolver.normalizedGroups(groups)
         let snapshots = TodoSorter.sorted(items, groups: normalizedGroups, now: now).map { item in
             AITodoItemSnapshot(item: item, group: TodoGroupResolver.group(for: item, groups: normalizedGroups))
@@ -76,9 +77,7 @@ enum AITodoContext {
             activeByGroup: activeByGroup,
             completed: completed,
             groups: normalizedGroups.map(AITodoGroupSnapshot.init(group:)),
-            dailySummaries: dailySummaries
-                .sorted { $0.createdAt > $1.createdAt }
-                .map(DailySummarySnapshot.init(summary:)),
+            summaries: summaries.sorted { $0.createdAt > $1.createdAt },
             stats: AITodoStats(
                 activeCount: active.count,
                 completedCount: completed.count,
@@ -134,10 +133,10 @@ extension AITodoSnapshot {
             lines.append(contentsOf: completedItems.map { "- id=\($0.id.uuidString) title=\($0.title) completedAt=\(Self.iso8601($0.updatedAt))" })
         }
 
-        let summaries = Array(dailySummaries.prefix(summaryLimit))
+        let summaries = Array(self.summaries.prefix(summaryLimit))
         if !summaries.isEmpty {
             lines.append("最近总结：")
-            lines.append(contentsOf: summaries.map { "- \($0.content)" })
+            lines.append(contentsOf: summaries.map { "- id=\($0.id.uuidString) title=\($0.title) periodStart=\(Self.iso8601($0.periodStart)) periodEnd=\(Self.iso8601($0.periodEnd))（结束时间不含） createdAt=\(Self.iso8601($0.createdAt))\n\($0.content)" })
         }
 
         if let average = stats.averageCompletionInterval {
@@ -148,7 +147,7 @@ extension AITodoSnapshot {
         return AITodoInlineContext(content: lines.joined(separator: "\n"))
     }
 
-    private static func iso8601(_ date: Date) -> String {
+    private nonisolated static func iso8601(_ date: Date) -> String {
         ISO8601DateFormatter().string(from: date)
     }
 
@@ -184,6 +183,7 @@ extension AITodoItemSnapshot {
         scheduledTimes = item.scheduledTimes
         recurrenceRule = item.recurrenceRule
         recurrenceAnchor = item.recurrenceAnchor
+        lastCompletedOccurrenceAt = item.lastCompletedOccurrenceAt
         nextOccurrenceAt = item.nextOccurrence()
         scheduleKind = item.scheduleKind
         isCompleted = item.isCompleted
@@ -201,14 +201,3 @@ extension AITodoGroupSnapshot {
     }
 }
 
-struct DailySummarySnapshot: Equatable, Identifiable, Codable {
-    let id: UUID
-    let content: String
-    let createdAt: Date
-
-    init(summary: DailySummary) {
-        id = summary.id
-        content = summary.content
-        createdAt = summary.createdAt
-    }
-}

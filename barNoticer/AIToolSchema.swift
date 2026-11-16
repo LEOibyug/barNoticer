@@ -98,20 +98,27 @@ enum AIToolSchema {
         ),
         tool(
             name: "update_todo",
-            description: "提出修改待办标题、重要性、分组或截止时间。应用按操作确认设置直接执行或等待确认，以工具返回结果为准。",
+            description: "按 ID 修改任意进行中或已完成事项的业务字段，包括完成状态及恢复未完成。只提交要改的字段，省略或 null 保留原值；可独立修改已有重复规则或起点。应用按操作确认设置直接执行或等待确认，以工具返回结果为准。",
             properties: [
                 "id": .object(["type": .string("string")]),
                 "title": .object(["type": .string("string"), "description": .string("修改事项标题。应短而具体，保留动作、对象和必要限定词；不能改成过度模糊的标题。")]),
                 "note": .object(["type": .string("string"), "description": .string("修改事项备注。用于保存背景、详细要求、验收标准、检查清单、上下文链接或长说明；清空备注时使用 clear_note=true。")]),
                 "priority": .object(["type": .string("string"), "enum": .array([.string("high"), .string("medium"), .string("low")])]),
                 "group_id": .object(["type": .string("string")]),
+                "clear_group": .object(["type": .string("boolean"), "description": .string("移回默认分组，不能与 group_id 同时设置。")]),
+                "is_completed": .object(["type": .string("boolean"), "description": .string("true 将整项标记已完成，false 恢复未完成；适用于普通及重复任务。重复任务仅完成当前一次时用 complete_todo，不要将整项结束。")]),
+                "automatically_completes": .object(["type": .string("boolean"), "description": .string("重复任务到点自动完成。仅在用户明确要求时设 true，补齐到期次数并进入下一次；false 关闭。可与重复计划同时设置，计划必须有效。")]),
+                "created_at": .object(["type": .string("string"), "description": .string("修改创建时间，带时区的 ISO8601。仅在用户明确要求修改历史时间时设置。")]),
+                "updated_at": .object(["type": .string("string"), "description": .string("修改更新时间；已完成任务用此字段记录完成时间。带时区的 ISO8601。省略则由应用记录本次修改时间。")]),
+                "last_completed_occurrence_at": .object(["type": .string("string"), "description": .string("重复任务最近已完成的周期时间，带时区的 ISO8601；用于修正推进进度，不是整项完成状态。")]),
+                "clear_last_completed_occurrence": .object(["type": .string("boolean"), "description": .string("重置重复任务完成进度到起点，不能同时设置 last_completed_occurrence_at。自动完成仍开启时，调度器会继续推进到期周期。")]),
                 "deadline_at": .object(["type": .string("string"), "description": .string("ISO8601 单次截止时间")]),
                 "reminder_minutes_before": .object(["type": .string("integer"), "minimum": .number(0), "maximum": .number(525600), "description": .string("设置单次 DDL 或重复事项每次到期前的提醒分钟数；0 为到点提醒。省略则保留原设置。需要任务已有单次 DDL/周期计划或同时设置有效日程；周期提醒完成本次后自动继承。")]),
                 "clear_reminder": .object(["type": .string("boolean"), "description": .string("关闭该任务主动设置的定时提醒，保留 DDL。不能与 reminder_minutes_before 同时填写。")]),
-                "scheduled_times": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("一次性多个时间点，ISO8601 字符串数组。")]),
-                "recurrence_rule": .object(["type": .string("string"), "enum": .array([.string("daily"), .string("weekly"), .string("monthly"), .string("every_n_days")])]),
-                "recurrence_interval_days": .object(["type": .string("integer"), "minimum": .number(1), "description": .string("仅 recurrence_rule=every_n_days 时填写，表示每 N 天重复。")]),
-                "recurrence_anchor": .object(["type": .string("string"), "description": .string("重复事项起始时间，ISO8601。")]),
+                "scheduled_times": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("一次性多个时间点，ISO8601 字符串数组；空数组清除时间计划。不能同时设置 DDL 或重复计划。")]),
+                "recurrence_rule": .object(["type": .string("string"), "enum": .array([.string("daily"), .string("weekly"), .string("monthly"), .string("every_n_days")]), "description": .string("修改重复规则，省略 recurrence_anchor 时保留已有起点；every_n_days 需同时给出 recurrence_interval_days。")]),
+                "recurrence_interval_days": .object(["type": .string("integer"), "minimum": .number(1), "description": .string("每 N 天重复的间隔；已有 every_n_days 任务可只修改此字段。")]),
+                "recurrence_anchor": .object(["type": .string("string"), "description": .string("重复事项起始时间，ISO8601；省略 recurrence_rule 时保留已有规则。")]),
                 "clear_note": .object(["type": .string("boolean"), "description": .string("清空事项备注。")]),
                 "clear_deadline": .object(["type": .string("boolean")]),
                 "clear_schedule": .object(["type": .string("boolean"), "description": .string("清除所有时间计划，包括 DDL、多时间点和重复规则。")])
@@ -119,14 +126,8 @@ enum AIToolSchema {
             required: ["id"]
         ),
         tool(
-            name: "set_recurring_auto_completion",
-            description: "设置周期事项到点自动完成。仅当用户明确要求时开启；开启后补齐过期次数并进入下一次，不累计逾期，提醒设置保留。关闭后需要手动完成。遵循普通操作确认开关。",
-            properties: ["id": .object(["type": .string("string")]), "enabled": .object(["type": .string("boolean")])],
-            required: ["id", "enabled"]
-        ),
-        tool(
             name: "complete_todo",
-            description: "提出完成指定待办。应用按操作确认设置直接执行或等待确认，以工具返回结果为准。",
+            description: "完成普通事项；重复事项只完成当前一次并推进到下一次，不结束整项。若用户要结束整个重复事项，使用 update_todo(is_completed=true)；恢复任意事项使用 update_todo(is_completed=false)。遵循操作确认设置。",
             properties: ["id": .object(["type": .string("string")])],
             required: ["id"]
         ),
@@ -163,10 +164,15 @@ enum AIToolSchema {
             required: ["id"]
         ),
         tool(
-            name: "save_daily_summary",
-            description: "保存用户主动输入的当日总结。应用按操作确认设置直接执行或等待确认，以工具返回结果为准。",
-            properties: ["content": .object(["type": .string("string")])],
-            required: ["content"]
+            name: "prepare_summary",
+            description: "将已向用户展示的总结整理为保存建议，必须包含标题、覆盖时间段和完整正文。此工具绝不保存；应用必须先逐条询问用户是否保存，只有用户点击该总结的保存按钮后才会写入。时间段为 [period_start, period_end)，结束时间不含且必须晚于开始时间。",
+            properties: [
+                "title": .object(["type": .string("string")]),
+                "period_start": .object(["type": .string("string"), "description": .string("覆盖开始时间，带时区的 ISO8601 日期时间。")]),
+                "period_end": .object(["type": .string("string"), "description": .string("覆盖结束时间（不含），带时区的 ISO8601 日期时间，必须晚于 period_start。")]),
+                "content": .object(["type": .string("string")])
+            ],
+            required: ["title", "period_start", "period_end", "content"]
         )
     ]
 

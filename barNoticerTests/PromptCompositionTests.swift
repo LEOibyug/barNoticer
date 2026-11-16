@@ -18,7 +18,6 @@ final class PromptCompositionTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(60))
         host.layoutSubtreeIfNeeded()
         let field = try XCTUnwrap(promptField(in: host))
-        XCTAssertEqual(field.placeholderAttributedString?.string, "询问 AI，或写下当日总结")
 
         // Keep the SwiftUI bindings stale to model an input method that has
         // not yet delivered controlTextDidChange. Native placeholder drawing

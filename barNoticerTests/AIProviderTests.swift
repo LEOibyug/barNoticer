@@ -40,41 +40,6 @@ final class AIProviderTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
-    func testProviderEditorUsesAlignedFieldsAndRendersPlaceholdersInside() async throws {
-        var draft = AISettingsDraft(defaults: defaults, keyStore: AIAPIKeyStore(defaults: defaults))
-        draft.provider.name = "个人供应商"
-        draft.baseURLText = "https://api.example.com/v1"
-        draft.apiKey = "test-key"
-        draft.model = "model-vision"
-        for empty in [false, true] {
-            if empty { draft.baseURLText = ""; draft.apiKey = ""; draft.model = "" }
-            let host = NSHostingView(rootView: SettingsPage(title: "AI 设置") {
-                AIProviderSettingsView(draft: .constant(draft), automaticallyDiscover: false)
-            }.environment(\.colorScheme, empty ? .light : .dark))
-            host.frame = CGRect(x: 0, y: 0, width: 720, height: 700)
-            let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
-            window.contentView = host
-            defer { window.orderOut(nil) }
-            window.orderFrontRegardless()
-            try await Task.sleep(for: .milliseconds(250))
-            host.layoutSubtreeIfNeeded()
-            func fields(_ view: NSView) -> [NSTextField] {
-                (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
-            }
-            let inputs = fields(host).filter { $0.isEditable }
-            XCTAssertGreaterThanOrEqual(inputs.count, 4)
-            let widths = inputs.map { $0.bounds.width }
-            if let min = widths.min(), let max = widths.max() { XCTAssertEqual(min, max, accuracy: 2) }
-            if empty {
-                XCTAssertTrue(inputs.contains { $0.placeholderString == "https://api.openai.com/v1" && $0.stringValue.isEmpty })
-            }
-            let image = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-            host.cacheDisplay(in: host.bounds, to: image)
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent(empty ? "provider-settings-empty.png" : "provider-settings-dark.png")
-            try XCTUnwrap(image.representation(using: .png, properties: [:])).write(to: url)
-            print("PROVIDER_RENDER=\(url.path)")
-        }
-    }
 
     func testMigrationPersistsIndependentProfilesAndEditingDoesNotChangeActiveRoute() throws {
         AISettings(baseURL: URL(string: "https://legacy.example/v1")!, model: "legacy", requiresActionConfirmation: false).save(to: defaults)
@@ -116,7 +81,8 @@ final class AIProviderTests: XCTestCase {
     }
 
     func testOrderedFallbackUsesEachProfilesOwnURLKeyModelAndProtocol() async throws {
-        let first = provider("first"), second = provider("second", format: .responses)
+        let first = provider("first")
+        var second = provider("second", format: .responses); second.reasoningEffort = .high
         var settings = AISettings(); settings.providerRoutes = [first, second]
         ProviderURLProtocol.handler = { request in
             if request.url?.host == "first.example" { return (401, ["error": "unauthorized"]) }
@@ -127,6 +93,176 @@ final class AIProviderTests: XCTestCase {
         XCTAssertEqual(ProviderURLProtocol.requests.map { $0.url?.path }, ["/v1/chat/completions", "/v1/responses"])
         XCTAssertEqual(ProviderURLProtocol.requests.map { $0.value(forHTTPHeaderField: "Authorization") }, ["Bearer key-first", "Bearer key-second"])
         XCTAssertEqual(try body(ProviderURLProtocol.requests[1])["model"] as? String, "model-second")
+        XCTAssertEqual((try body(ProviderURLProtocol.requests[1])["reasoning"] as? [String: Any])?["effort"] as? String, "high")
+    }
+
+    func testResponsesReasoningOnlyResultsRemainUsableWithoutInventedText() async throws {
+        let api = client()
+        let settings = AISettings(responseFormat: .responses)
+        for summary in [[], [["type": "summary_text", "text": "returned summary"]]] as [[[String: String]]] {
+            ProviderURLProtocol.handler = { _ in
+                (200, ["status": "completed", "error": NSNull(), "output": [
+                    ["type": "reasoning", "id": "r1", "summary": summary, "encrypted_content": "opaque-only"]
+                ]])
+            }
+            let result = try await api.send(messages: [.init(role: "user", content: "question")], settings: settings, apiKey: "key", tools: [])
+            XCTAssertTrue(result.content.isEmpty)
+            XCTAssertTrue(result.toolCalls.isEmpty)
+            XCTAssertEqual(result.reasoningContent, summary.isEmpty ? nil : "returned summary")
+            XCTAssertEqual(result.responseItems?.count, 1)
+        }
+    }
+
+    func testResponsesRejectsNonterminalAndPartialResultsAtClientBoundary() async throws {
+        let api = client()
+        let output: [[String: Any]] = [
+            ["type": "message", "content": [["type": "output_text", "text": "partial"]]],
+            ["type": "function_call", "call_id": "c1", "name": "complete_todo", "arguments": "{}"]
+        ]
+        for status in ["failed", "incomplete", "in_progress", "queued", "cancelled"] {
+            ProviderURLProtocol.handler = { _ in
+                (200, ["status": status, "output": output, "incomplete_details": ["reason": "max_output_tokens"]])
+            }
+            do {
+                _ = try await api.send(messages: [], settings: AISettings(responseFormat: .responses), apiKey: "key", tools: [])
+                XCTFail("Must reject \(status), including partial tool calls")
+            } catch {
+                XCTAssertTrue(error.localizedDescription.contains(status))
+                if status == "incomplete" { XCTAssertTrue(error.localizedDescription.contains("max_output_tokens")) }
+            }
+        }
+        ProviderURLProtocol.handler = { _ in
+            (200, ["status": "completed", "output": [["type": "message", "status": "incomplete",
+                "content": [["type": "output_text", "text": "partial"]]]]])
+        }
+        do {
+            _ = try await api.send(messages: [], settings: AISettings(responseFormat: .responses), apiKey: "key", tools: [])
+            XCTFail("Must reject incomplete output items")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("incomplete")) }
+    }
+
+    func testDirectResponsesReplayIsScopedToActualProviderRoute() async throws {
+        let api = client()
+        let first = AISettings(baseURL: URL(string: "https://first.example/v1")!, responseFormat: .responses)
+        let second = AISettings(baseURL: URL(string: "https://second.example/v1")!, responseFormat: .responses)
+        ProviderURLProtocol.handler = { _ in
+            (200, ["status": "completed", "output": [
+                ["type": "reasoning", "id": "r1", "summary": [], "encrypted_content": "route-private"],
+                ["type": "function_call", "id": "f1", "call_id": "c1", "name": "list_active_todos", "arguments": "{}"]
+            ]])
+        }
+        let result = try await api.send(messages: [.init(role: "user", content: "tasks")], settings: first, apiKey: "key", tools: [])
+        let history: [AIChatMessage] = [.init(role: "assistant", content: result.content, toolCalls: result.toolCalls,
+            responseItems: result.responseItems, responseProviderID: result.responseProviderID),
+            .init(role: "tool", content: "list", toolCallID: "c1")]
+        ProviderURLProtocol.handler = { _ in
+            (200, ["status": "completed", "output": [["type": "message", "content": [["type": "output_text", "text": "done"]]]]])
+        }
+        _ = try await api.send(messages: history, settings: first, apiKey: "key", tools: [])
+        _ = try await api.send(messages: history, settings: second, apiKey: "key", tools: [])
+        let same = String(decoding: try JSONSerialization.data(withJSONObject: body(ProviderURLProtocol.requests[1])), as: UTF8.self)
+        let other = String(decoding: try JSONSerialization.data(withJSONObject: body(ProviderURLProtocol.requests[2])), as: UTF8.self)
+        XCTAssertTrue(same.contains("route-private"))
+        XCTAssertFalse(other.contains("route-private"))
+        XCTAssertTrue(other.contains("function_call_output"))
+        XCTAssertTrue(other.contains("c1"))
+    }
+
+    func testHTTPFailureSurfacesBoundedProviderDiagnosticWithoutCredentialsOrRequestBody() async throws {
+        let secret = "actual-provider-secret"
+        ProviderURLProtocol.handler = { _ in
+            (400, ["error": ["message": "Unsupported reasoning_effort high; \(secret); Bearer hidden-token; sk-other-secret " + String(repeating: "detail ", count: 150),
+                "code": "unsupported_parameter", "param": "reasoning_effort"], "request": ["prompt": "private user prompt"]])
+        }
+        do {
+            _ = try await client().send(messages: [.init(role: "user", content: "private user prompt")],
+                settings: AISettings(reasoningEffort: .high), apiKey: secret, tools: [])
+            XCTFail("Expected provider rejection")
+        } catch {
+            let message = error.localizedDescription
+            XCTAssertTrue(message.contains("400"))
+            XCTAssertTrue(message.contains("Unsupported reasoning_effort high"))
+            XCTAssertFalse(message.contains(secret))
+            XCTAssertFalse(message.contains("hidden-token"))
+            XCTAssertFalse(message.contains("sk-other-secret"))
+            XCTAssertFalse(message.contains("private user prompt"))
+            XCTAssertLessThan(message.count, 600)
+        }
+    }
+
+    func testCompatibleObjectArgumentsReachConsumerAndMalformedStringsRemainIntact() async throws {
+        let api = client()
+        let cases: [(arguments: Any, accepted: Bool)] = [
+            (["title": 17], true), ("{broken", true), (NSNull(), false), (42, false), (["array"], false)
+        ]
+        for format in [AIResponseFormat.chatCompletions, .responses] {
+            for entry in cases {
+                ProviderURLProtocol.handler = { _ in
+                    if format == .chatCompletions {
+                        return (200, ["choices": [["message": ["tool_calls": [
+                            ["id": "c1", "type": "function", "function": ["name": "create_todo", "arguments": entry.arguments]]
+                        ]]]]])
+                    }
+                    return (200, ["status": "completed", "output": [
+                        ["type": "function_call", "call_id": "c1", "name": "create_todo", "arguments": entry.arguments]
+                    ]])
+                }
+                let result: AIChatResult
+                do {
+                    result = try await api.send(messages: [.init(role: "user", content: "create")],
+                        settings: AISettings(responseFormat: format), apiKey: "key", tools: [])
+                } catch {
+                    if entry.accepted { XCTFail("Expected usable arguments: \(error)") }
+                    continue
+                }
+                guard entry.accepted else { XCTFail("Invalid argument shape must not become an empty object"); continue }
+                let call = try XCTUnwrap(result.toolCalls.first)
+                XCTAssertEqual(call.id, "c1")
+                XCTAssertEqual(call.function.name, "create_todo")
+                if let string = entry.arguments as? String {
+                    XCTAssertEqual(call.function.arguments, string)
+                } else {
+                    let arguments = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(call.function.arguments.utf8)) as? [String: Any])
+                    XCTAssertEqual(arguments["title"] as? Int, 17, "Invalid field value must reach executor feedback unchanged")
+                }
+            }
+        }
+    }
+
+    func testDirectClientPreservesSelectedEffortAndUsesOnlyNativeProtocolParameters() async throws {
+        let efforts: [AIReasoningEffort?] = [nil] + AIReasoningEffort.allCases.map { Optional($0) }
+        let api = client()
+        for format in AIResponseFormat.allCases {
+            for effort in efforts {
+                ProviderURLProtocol.handler = { _ in
+                    switch format {
+                    case .chatCompletions: return (200, ["choices": [["message": ["content": "ok"]]]])
+                    case .responses: return (200, ["status": "completed", "output": [["type": "message", "content": [["type": "output_text", "text": "ok"]]]]])
+                    case .anthropic: return (200, ["content": [["type": "text", "text": "ok"]], "stop_reason": "end_turn"])
+                    }
+                }
+                _ = try await api.send(messages: [.init(role: "user", content: "hello")],
+                    settings: AISettings(responseFormat: format, reasoningEffort: effort), apiKey: "key", tools: [])
+                let json = try body(XCTUnwrap(ProviderURLProtocol.requests.last))
+                switch format {
+                case .chatCompletions:
+                    XCTAssertEqual(json["reasoning_effort"] as? String, effort?.rawValue)
+                    XCTAssertNil(json["reasoning"])
+                case .responses:
+                    if let effort {
+                        let reasoning = try XCTUnwrap(json["reasoning"] as? [String: Any])
+                        XCTAssertEqual(reasoning["effort"] as? String, effort.rawValue)
+                        XCTAssertEqual(reasoning["summary"] as? String, effort == .none ? nil : "auto")
+                    } else {
+                        XCTAssertNil(json["reasoning"], "Unconfigured reasoning must not break compatible providers")
+                    }
+                    XCTAssertNil(json["reasoning_effort"])
+                case .anthropic:
+                    XCTAssertNil(json["reasoning"])
+                    XCTAssertNil(json["reasoning_effort"])
+                }
+            }
+        }
     }
 
     func testSingleModeDoesNotTryOtherSavedProviderAndCancellationDoesNotFallback() async throws {
@@ -147,7 +283,7 @@ final class AIProviderTests: XCTestCase {
         let call = AIToolCall(id: "call1", type: "function", function: .init(name: "list_active_todos", arguments: "{}"))
         let messages: [AIChatMessage] = [
             .init(role: "system", content: "policy"),
-            .init(role: "user", content: "image", imageURLs: ["data:image/png;base64,aW1hZ2U="]),
+            .init(role: "user", content: nil, imageURLs: ["data:image/png;base64,aW1hZ2U="]),
             .init(role: "assistant", content: "", toolCalls: [call]),
             .init(role: "tool", content: "result", toolCallID: "call1")
         ]
@@ -167,6 +303,7 @@ final class AIProviderTests: XCTestCase {
                 XCTAssertEqual(input.last?["type"] as? String, "function_call_output")
                 XCTAssertEqual(input.last?["call_id"] as? String, "call1")
                 XCTAssertEqual(json["store"] as? Bool, false)
+                XCTAssertEqual((input[1]["content"] as? [[String: Any]])?.first?["type"] as? String, "input_image")
             case .anthropic:
                 XCTAssertEqual(request.value(forHTTPHeaderField: "x-api-key"), p.apiKey)
                 XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
@@ -178,19 +315,44 @@ final class AIProviderTests: XCTestCase {
         }
     }
 
-    func testResponsesRetainsReasoningAndAnthropicDecodesCalls() throws {
-        let response: [String: Any] = ["status": "completed", "output": [
-            ["type": "reasoning", "id": "r1", "summary": [], "encrypted_content": "opaque"],
-            ["type": "function_call", "id": "f1", "call_id": "c1", "name": "complete_todo", "arguments": "{}"]
-        ]]
-        let result = try AIProviderTransport.decode(JSONSerialization.data(withJSONObject: response), format: .responses)
+    func testResponsesExtractsTypedAssistantTextAndSummariesAndReplaysCompleteOutput() async throws {
+        let p = provider("wire", format: .responses)
+        var settings = AISettings(); settings.providerRoutes = [p]
+        let output: [[String: Any]] = [
+            ["type": "reasoning", "id": "r1", "summary": [
+                ["type": "summary_text", "text": "summary one"],
+                ["type": "unknown", "text": "not a summary"],
+                ["type": "summary_text", "text": "summary two"]
+            ], "encrypted_content": "opaque", "provider_extension": ["tokens": [1, 2, 3]]],
+            ["type": "provider_trace", "content": [["type": "output_text", "text": "not a message"]]],
+            ["type": "message", "role": "user", "content": [["type": "output_text", "text": "not assistant"]]],
+            ["type": "message", "role": "assistant", "id": "m1", "status": "completed", "content": [
+                ["type": "output_text", "text": "visible", "annotations": [["type": "custom", "value": "retained"]]],
+                ["type": "input_text", "text": "not output"],
+                ["type": "refusal", "refusal": "refusal"]
+            ]],
+            ["type": "function_call", "id": "f1", "call_id": "c1", "name": "list_active_todos", "arguments": "{}"]
+        ]
+        ProviderURLProtocol.handler = { _ in (200, ["status": "completed", "error": NSNull(), "output": output]) }
+        let api = client()
+        let result = try await api.send(messages: [.init(role: "user", content: "tasks")], settings: settings, apiKey: "", tools: [])
+        XCTAssertEqual(result.content, "visible\nrefusal")
+        XCTAssertEqual(result.reasoningContent, "summary one\nsummary two")
         XCTAssertEqual(result.toolCalls.first?.id, "c1")
-        let request = try AIProviderTransport.request(messages: [.init(role: "assistant", content: result.content,
-            toolCalls: result.toolCalls, responseItems: result.responseItems), .init(role: "tool", content: "done", toolCallID: "c1")],
-            settings: provider("wire", format: .responses).settings, key: "key", tools: [])
-        let input = try XCTUnwrap(try body(request)["input"] as? [[String: Any]])
-        XCTAssertEqual(input.count, 3)
-        XCTAssertEqual(input.first?["encrypted_content"] as? String, "opaque")
+        ProviderURLProtocol.handler = { _ in
+            (200, ["status": "completed", "output": [["type": "message", "content": [["type": "output_text", "text": "done"]]]]])
+        }
+        _ = try await api.send(messages: [.init(role: "assistant", content: result.content,
+            reasoningContent: result.reasoningContent, toolCalls: result.toolCalls, responseItems: result.responseItems,
+            responseProviderID: result.responseProviderID), .init(role: "tool", content: "list", toolCallID: "c1")],
+            settings: settings, apiKey: "", tools: [])
+        let input = try XCTUnwrap(try body(ProviderURLProtocol.requests[1])["input"] as? [[String: Any]])
+        XCTAssertEqual(input.count, output.count + 1)
+        XCTAssertTrue(NSArray(array: Array(input.prefix(output.count))).isEqual(to: output))
+        XCTAssertEqual(input.last?["type"] as? String, "function_call_output")
+    }
+
+    func testAnthropicDecodesToolCalls() throws {
         let anthropic: [String: Any] = ["content": [["type": "tool_use", "id": "c2", "name": "complete_todo", "input": ["id": "todo"]]], "stop_reason": "tool_use"]
         let decoded = try AIProviderTransport.decode(JSONSerialization.data(withJSONObject: anthropic), format: .anthropic)
         XCTAssertEqual(decoded.toolCalls.first?.function.name, "complete_todo")

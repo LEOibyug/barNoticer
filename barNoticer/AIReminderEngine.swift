@@ -13,17 +13,17 @@ final class AIReminderEngine {
 
     init(
         modelContext: ModelContext,
-        client: AIClient = AIClient(),
+        client: AIClient? = nil,
         apiKeyStore: AIAPIKeyStore = .shared,
-        historyStore: ReminderHistoryStore = ReminderHistoryStore(),
+        historyStore: ReminderHistoryStore? = nil,
         logStore: AppDebugLogStore = .shared,
         defaults: UserDefaults = .standard,
         memoryStore: AIGlobalMemoryStore? = nil
     ) {
         self.modelContext = modelContext
-        self.client = client
+        self.client = client ?? AIClient()
         self.apiKeyStore = apiKeyStore
-        self.historyStore = historyStore
+        self.historyStore = historyStore ?? ReminderHistoryStore()
         self.logStore = logStore
         self.defaults = defaults
         self.memoryStore = memoryStore ?? AIGlobalMemoryStore(defaults: defaults)
@@ -183,7 +183,7 @@ enum AIReminderPromptBuilder {
         return lines.joined(separator: "\n")
     }
 
-    private static func iso8601(_ date: Date) -> String {
+    private nonisolated static func iso8601(_ date: Date) -> String {
         ISO8601DateFormatter().string(from: date)
     }
 

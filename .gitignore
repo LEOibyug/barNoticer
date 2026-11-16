@@ -33,6 +33,7 @@ Package.resolved
 
 # Logs and local runtime data
 *.log
+*.profraw
 Logs/
 
 # Editor and tooling

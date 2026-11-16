@@ -20,17 +20,18 @@ final class ReminderScheduler {
         modelContext: ModelContext,
         engine: AIReminderEngine? = nil,
         presenter: ReminderPresenter? = nil,
-        historyStore: ReminderHistoryStore = ReminderHistoryStore(),
+        historyStore: ReminderHistoryStore? = nil,
         defaults: UserDefaults = .standard,
         logStore: AppDebugLogStore = .shared
     ) {
+        let resolvedHistoryStore = historyStore ?? ReminderHistoryStore()
         self.modelContext = modelContext
-        self.historyStore = historyStore
+        self.historyStore = resolvedHistoryStore
         self.defaults = defaults
         self.logStore = logStore
         self.settings = ReminderSettings(defaults: defaults)
-        self.engine = engine ?? AIReminderEngine(modelContext: modelContext, historyStore: historyStore, logStore: logStore, defaults: defaults)
-        self.presenter = presenter ?? ReminderPresenter(modelContext: modelContext, historyStore: historyStore, logStore: logStore)
+        self.engine = engine ?? AIReminderEngine(modelContext: modelContext, historyStore: resolvedHistoryStore, logStore: logStore, defaults: defaults)
+        self.presenter = presenter ?? ReminderPresenter(modelContext: modelContext, historyStore: resolvedHistoryStore, logStore: logStore)
         self.scheduledReminders = ScheduledReminderScheduler(modelContext: modelContext, presenter: self.presenter, engine: self.engine, defaults: defaults)
 
         NotificationCenter.default.addObserver(

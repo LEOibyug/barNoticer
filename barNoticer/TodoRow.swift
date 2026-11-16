@@ -8,11 +8,11 @@ struct TodoRow: View {
     let groups: [TodoGroup]
 
     @State private var editedTitle = ""
-    @State private var editedNote = ""
-    @State private var scheduleDraft = TodoScheduleDraft()
+    @State private var editDraft = TodoItemEditDraft()
     @State private var isShowingSettings = false
     @State private var isNoteExpanded = false
     @State private var sheetErrorText: String?
+    @State private var rowErrorText: String?
     @State private var conflictFields: [String]?
     @FocusState private var isTitleFocused: Bool
 
@@ -38,15 +38,13 @@ struct TodoRow: View {
         }
         .padding(.vertical, 8)
         .onAppear {
-            syncScheduleState()
+            syncEditState()
             syncTitleState()
-            syncNoteState()
         }
         .id(item.id)
         .onChange(of: item.id) { _, _ in
             syncTitleState()
-            syncNoteState()
-            syncScheduleState()
+            syncEditState()
             isNoteExpanded = false
         }
         .onChange(of: item.title) { _, newTitle in
@@ -54,7 +52,7 @@ struct TodoRow: View {
             editedTitle = newTitle
         }
         .onChange(of: item.updatedAt) { _, _ in
-            if !isShowingSettings { syncScheduleState() }
+            if !isShowingSettings { syncEditState() }
             if noteText == nil {
                 isNoteExpanded = false
             }
@@ -68,6 +66,17 @@ struct TodoRow: View {
         )) {
             settingsSheet
         }
+        .alert(
+            "保存失败",
+            isPresented: Binding(
+                get: { rowErrorText != nil },
+                set: { if !$0 { rowErrorText = nil } }
+            )
+        ) {
+            Button("好", role: .cancel) { rowErrorText = nil }
+        } message: {
+            Text(rowErrorText ?? "")
+        }
     }
 
     private var completionButton: some View {
@@ -77,7 +86,9 @@ struct TodoRow: View {
             } else {
                 item.updateCompletion(!item.isCompleted)
             }
-            try? modelContext.save()
+            if let error = ModelContextPersistence.save(modelContext, category: "TodoRow", action: "更新事项完成状态") {
+                rowErrorText = error
+            }
         } label: {
             Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 18))
@@ -103,9 +114,8 @@ struct TodoRow: View {
 
     private var settingsButton: some View {
         Button {
-            syncScheduleState()
+            syncEditState()
             syncTitleState()
-            syncNoteState()
             sheetErrorText = nil
             conflictFields = nil
             isShowingSettings = true
@@ -151,19 +161,15 @@ struct TodoRow: View {
 
             Form {
                 Section("基础信息") {
-                    TextField("待办标题", text: $editedTitle)
+                    TextField("待办标题", text: $editDraft.title)
                         .textFieldStyle(.roundedBorder)
-                        .onSubmit(commitTitle)
-                        .onDisappear {
-                            commitTitle()
-                        }
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("备注")
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
-                        TextEditor(text: $editedNote)
+                        TextEditor(text: $editDraft.note)
                             .font(.body)
                             .scrollContentBackground(.hidden)
                             .frame(minHeight: 78, maxHeight: 96)
@@ -173,16 +179,15 @@ struct TodoRow: View {
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                                     .stroke(.quaternary, lineWidth: 1)
                             }
-                            .onChange(of: editedNote) { _, newValue in
-                                item.updateNote(newValue)
-                            }
                     }
 
                     Picker("分组", selection: Binding(
                         get: { item.groupID ?? TodoGroup.defaultGroupID },
                         set: {
                             item.updateGroup($0)
-                            try? modelContext.save()
+                            if let error = ModelContextPersistence.save(modelContext, category: "TodoEdit", action: "修改事项分组") {
+                                sheetErrorText = error
+                            }
                         }
                     )) {
                         ForEach(groups) { group in
@@ -195,7 +200,9 @@ struct TodoRow: View {
                         get: { item.priority },
                         set: {
                             item.priority = $0
-                            try? modelContext.save()
+                            if let error = ModelContextPersistence.save(modelContext, category: "TodoEdit", action: "修改事项优先级") {
+                                sheetErrorText = error
+                            }
                         }
                     )) {
                         ForEach(TodoPriority.allCases) { priority in
@@ -207,17 +214,17 @@ struct TodoRow: View {
                 }
 
                 Section("时间计划") {
-                    TodoScheduleEditor(draft: $scheduleDraft, layout: .form)
-                    if scheduleDraft.supportsReminder {
-                        TodoReminderEditor(minutesBefore: $scheduleDraft.reminderMinutesBefore, isRecurring: scheduleDraft.kind == .recurring)
-                        if scheduleDraft.kind == .recurring {
-                            Text(scheduleDraft.automaticallyCompletes
+                    TodoScheduleEditor(draft: $editDraft.schedule, layout: .form)
+                    if editDraft.schedule.supportsReminder {
+                        TodoReminderEditor(minutesBefore: $editDraft.schedule.reminderMinutesBefore, isRecurring: editDraft.schedule.kind == .recurring)
+                        if editDraft.schedule.kind == .recurring {
+                            Text(editDraft.schedule.automaticallyCompletes
                                 ? "到点自动完成并进入下一次，不累计逾期。提醒设置会持续沿用。"
                                 : "每次按当前未完成的一次提醒，完成后自动延续，直到关闭提醒。")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                        } else if let minutes = scheduleDraft.reminderMinutesBefore {
-                            Text("提醒时间：\(scheduleDraft.deadline.addingTimeInterval(-Double(minutes) * 60).formatted(date: .abbreviated, time: .shortened))")
+                        } else if let minutes = editDraft.schedule.reminderMinutesBefore {
+                            Text("提醒时间：\(editDraft.schedule.deadline.addingTimeInterval(-Double(minutes) * 60).formatted(date: .abbreviated, time: .shortened))")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -254,9 +261,8 @@ struct TodoRow: View {
         .frame(width: 430)
         .presentationSizing(.fitted)
         .onAppear {
-            syncScheduleState()
+            syncEditState()
             syncTitleState()
-            syncNoteState()
         }
         .alert(
             "这项任务已更新。",
@@ -266,7 +272,8 @@ struct TodoRow: View {
             )
         ) {
             Button("重新载入") {
-                scheduleDraft = TodoScheduleDraft(item: item)
+                editDraft = TodoItemEditDraft(item: item)
+                syncTitleState()
                 sheetErrorText = nil
             }
             Button("覆盖保存") {
@@ -348,32 +355,25 @@ struct TodoRow: View {
 
         if trimmedTitle != item.title {
             item.updateTitle(trimmedTitle)
+            if let error = ModelContextPersistence.save(modelContext, category: "TodoRow", action: "保存标题") {
+                rowErrorText = error
+            }
         }
     }
 
-    private func commitNote() {
-        guard editedNote != (item.note ?? "") else { return }
-        item.updateNote(editedNote)
-    }
-
-    private func syncScheduleState() {
-        scheduleDraft = TodoScheduleDraft(item: item)
+    private func syncEditState() {
+        editDraft = TodoItemEditDraft(item: item)
     }
 
     private func syncTitleState() {
         editedTitle = item.title
     }
 
-    private func syncNoteState() {
-        editedNote = item.note ?? ""
-    }
-
     /// 显式“完成”：提交失败或冲突时保持窗口打开，给出反馈。
     private func finishEditing(force: Bool = false) {
-        commitTitle()
-        commitNote()
-        switch TodoScheduleCommitter.commit(&scheduleDraft, into: item, context: modelContext, force: force) {
+        switch TodoEditCommitter.commit(&editDraft, into: item, context: modelContext, force: force) {
         case .saved:
+            syncTitleState()
             sheetErrorText = nil
             conflictFields = nil
             isShowingSettings = false
@@ -389,24 +389,27 @@ struct TodoRow: View {
         }
     }
 
-    /// 关闭设置时的自动提交保持既有语义；失败不阻断关闭，但不假装完成。
+    /// 关闭设置时的自动提交保持既有语义；失败不阻断关闭，但记录并提示错误。
     private func commitOnDismiss() {
         guard !item.isDeleted, item.modelContext != nil else { return }
-        commitTitle()
-        commitNote()
-        if scheduleDraft.hasChanges {
-            let outcome = TodoScheduleCommitter.commit(&scheduleDraft, into: item, context: modelContext)
-            if case .saveFailed = outcome {
-                // 草稿未清基线，下次打开仍能看到未保存的编辑值。
-            }
-        } else {
-            try? modelContext.save()
+        switch TodoEditCommitter.commit(&editDraft, into: item, context: modelContext) {
+        case .saved, .itemDeleted:
+            break
+        case let .conflict(fields):
+            rowErrorText = "以下字段在编辑期间已被更新，本次关闭未覆盖：\(fields.joined(separator: "、"))。"
+        case let .saveFailed(reason):
+            try? AppDebugLogStore.shared.write(.error, category: "TodoEdit", message: "关闭事项设置保存失败", metadata: ["error": reason, "itemID": item.id.uuidString])
+            rowErrorText = "保存修改失败：\(reason)"
         }
+        syncTitleState()
     }
 
     private func deleteItem() {
         modelContext.delete(item)
-        try? modelContext.save()
+        if let error = ModelContextPersistence.save(modelContext, category: "TodoEdit", action: "删除事项") {
+            sheetErrorText = error
+            return
+        }
         isShowingSettings = false
     }
 }

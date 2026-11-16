@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Wire adapters keep vendor payloads out of task execution and approval policy.
@@ -15,7 +16,8 @@ enum AIProviderTransport {
     }
 
     static func request(messages: [AIChatMessage], settings: AISettings, key: String,
-                        tools: [AIToolDefinition], maxTokens: Int? = nil, providerID: UUID? = nil) throws -> URLRequest {
+                        tools: [AIToolDefinition], maxTokens: Int? = nil, providerID: UUID? = nil,
+                        stream: Bool = false) throws -> URLRequest {
         guard settings.isValid else { throw AIClientError.invalidSettings }
         let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw AIClientError.missingAPIKey }
@@ -25,15 +27,25 @@ enum AIProviderTransport {
         authorize(&request, key: key, format: settings.responseFormat)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var body: [String: Any] = ["model": settings.model]
+        if stream {
+            body["stream"] = true
+            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        }
         switch settings.responseFormat {
         case .chatCompletions:
             body["messages"] = try object(messages)
+            if let effort = settings.reasoningEffort { body["reasoning_effort"] = effort.rawValue }
             if !tools.isEmpty { body["tools"] = try object(tools) }
             if let maxTokens { body["max_tokens"] = maxTokens }
         case .responses:
             body["store"] = false
             body["include"] = ["reasoning.encrypted_content"]
-            body["input"] = try responsesInput(messages, providerID: providerID)
+            body["input"] = try responsesInput(messages, providerID: providerID ?? responseProviderID(settings: settings, key: key))
+            if let effort = settings.reasoningEffort {
+                var reasoning: [String: Any] = ["effort": effort.rawValue]
+                if effort != .none { reasoning["summary"] = "auto" }
+                body["reasoning"] = reasoning
+            }
             if !tools.isEmpty {
                 body["tools"] = try tools.map { tool in
                     ["type": "function", "name": tool.function.name,
@@ -66,9 +78,12 @@ enum AIProviderTransport {
         }
     }
 
-    static func decode(_ data: Data, format: AIResponseFormat) throws -> AIChatResult {
-        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any], root["error"] == nil else {
+    static func decode(_ data: Data, format: AIResponseFormat, apiKey: String = "") throws -> AIChatResult {
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw AIClientError.invalidResponse
+        }
+        if root["error"] != nil, !(root["error"] is NSNull) {
+            throw AIClientError.providerResponseFailed(failureMessage(data, apiKey: apiKey))
         }
         switch format {
         case .chatCompletions:
@@ -76,29 +91,55 @@ enum AIProviderTransport {
                 throw AIClientError.invalidResponse
             }
             let calls = try (message["tool_calls"] as? [[String: Any]] ?? []).map { call in
-                try JSONDecoder().decode(AIToolCall.self, from: JSONSerialization.data(withJSONObject: call))
+                guard let id = call["id"] as? String, let type = call["type"] as? String,
+                      let function = call["function"] as? [String: Any],
+                      let name = function["name"] as? String else { throw AIClientError.invalidResponse }
+                return AIToolCall(id: id, type: type,
+                    function: .init(name: name, arguments: try toolArguments(function["arguments"])))
             }
             guard message["content"] is String || !calls.isEmpty else { throw AIClientError.invalidResponse }
             return AIChatResult(content: message["content"] as? String ?? "",
                 reasoningContent: message["reasoning_content"] as? String, toolCalls: calls)
         case .responses:
-            guard let output = root["output"] as? [[String: Any]], root["status"] as? String != "failed",
-                  root["status"] as? String != "incomplete" else { throw AIClientError.invalidResponse }
-            var texts: [String] = [], calls: [AIToolCall] = []
+            if let status = root["status"] as? String, status != "completed" {
+                let reason = (root["incomplete_details"] as? [String: Any])?["reason"] as? String
+                throw AIClientError.providerResponseFailed("响应未完成（\(safeDiagnostic([status, reason].compactMap { $0 }.joined(separator: ": "), apiKey: apiKey))）")
+            }
+            guard let output = root["output"] as? [[String: Any]] else { throw AIClientError.invalidResponse }
+            var texts: [String] = [], summaries: [String] = [], calls: [AIToolCall] = []
+            var hasReasoning = false
             for item in output {
-                if item["type"] as? String == "function_call" {
-                    guard let id = item["call_id"] as? String, let name = item["name"] as? String,
-                          let arguments = item["arguments"] as? String else { throw AIClientError.invalidResponse }
-                    calls.append(.init(id: id, type: "function", function: .init(name: name, arguments: arguments)))
+                if let status = item["status"] as? String, status != "completed" {
+                    throw AIClientError.providerResponseFailed("响应项目未完成（\(safeDiagnostic(status, apiKey: apiKey))）")
                 }
-                for part in item["content"] as? [[String: Any]] ?? [] {
-                    if let text = part["text"] as? String { texts.append(text) }
-                    if let refusal = part["refusal"] as? String { texts.append(refusal) }
+                switch item["type"] as? String {
+                case "function_call":
+                    guard let id = item["call_id"] as? String, let name = item["name"] as? String else {
+                        throw AIClientError.invalidResponse
+                    }
+                    calls.append(.init(id: id, type: "function",
+                        function: .init(name: name, arguments: try toolArguments(item["arguments"]))))
+                case "reasoning":
+                    hasReasoning = true
+                    for part in item["summary"] as? [[String: Any]] ?? [] where part["type"] as? String == "summary_text" {
+                        if let text = part["text"] as? String, !text.isEmpty { summaries.append(text) }
+                    }
+                case "message":
+                    guard item["role"] == nil || item["role"] as? String == "assistant" else { continue }
+                    for part in item["content"] as? [[String: Any]] ?? [] {
+                        switch part["type"] as? String {
+                        case "output_text": if let text = part["text"] as? String { texts.append(text) }
+                        case "refusal": if let refusal = part["refusal"] as? String { texts.append(refusal) }
+                        default: break
+                        }
+                    }
+                default: break
                 }
             }
-            guard !texts.isEmpty || !calls.isEmpty else { throw AIClientError.invalidResponse }
+            guard !texts.isEmpty || !calls.isEmpty || hasReasoning else { throw AIClientError.invalidResponse }
             let items = try JSONDecoder().decode([JSONValue].self, from: JSONSerialization.data(withJSONObject: output))
-            return AIChatResult(content: texts.joined(separator: "\n"), toolCalls: calls, responseItems: items)
+            return AIChatResult(content: texts.joined(separator: "\n"),
+                reasoningContent: summaries.isEmpty ? nil : summaries.joined(separator: "\n"), toolCalls: calls, responseItems: items)
         case .anthropic:
             guard let blocks = root["content"] as? [[String: Any]], root["stop_reason"] as? String != "max_tokens" else {
                 throw AIClientError.invalidResponse
@@ -118,6 +159,21 @@ enum AIProviderTransport {
         }
     }
 
+    private static func toolArguments(_ value: Any?) throws -> String {
+        if let text = value as? String { return text }
+        guard let object = value as? [String: Any] else { throw AIClientError.invalidResponse }
+        return String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+    }
+
+    static func responseProviderID(settings: AISettings, key: String) -> UUID {
+        // Direct callers have no saved profile UUID; scope opaque items to their actual route.
+        let scope = [settings.baseURL.absoluteString, settings.responseFormat.rawValue, settings.model,
+                     key.trimmingCharacters(in: .whitespacesAndNewlines)].joined(separator: "\0")
+        return SHA256.hash(data: Data(scope.utf8)).withUnsafeBytes { bytes in
+            UUID(uuid: bytes.load(as: uuid_t.self))
+        }
+    }
+
     private static func responsesInput(_ messages: [AIChatMessage], providerID: UUID?) throws -> [[String: Any]] {
         var input: [[String: Any]] = []
         for message in messages {
@@ -129,11 +185,12 @@ enum AIProviderTransport {
                 input.append(["type": "function_call_output", "call_id": message.toolCallID ?? "", "output": message.content ?? ""])
                 continue
             }
-            if let text = message.content, !text.isEmpty || !message.imageURLs.isEmpty {
-                var parts: [[String: Any]] = [["type": message.role == "assistant" ? "output_text" : "input_text", "text": text]]
-                parts += message.imageURLs.map { ["type": "input_image", "image_url": $0] }
-                input.append(["role": message.role, "content": parts])
+            var parts: [[String: Any]] = []
+            if let text = message.content, !text.isEmpty {
+                parts.append(["type": message.role == "assistant" ? "output_text" : "input_text", "text": text])
             }
+            parts += message.imageURLs.map { ["type": "input_image", "image_url": $0] }
+            if !parts.isEmpty { input.append(["role": message.role, "content": parts]) }
             for call in message.toolCalls ?? [] {
                 input.append(["type": "function_call", "call_id": call.id, "name": call.function.name, "arguments": call.function.arguments])
             }
@@ -172,6 +229,26 @@ enum AIProviderTransport {
             } else { result.append(["role": role, "content": blocks]) }
         }
         return result
+    }
+
+    static func failureMessage(_ data: Data, apiKey: String = "") -> String {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return "供应商未能完成请求，请检查模型、协议、推理设置和 API Key"
+        }
+        let error = root["error"] as? [String: Any]
+        let message = error?["message"] as? String ?? root["message"] as? String ?? root["error"] as? String
+        let details = [message, error?["code"] as? String, error?["param"] as? String].compactMap { $0 }
+        guard !details.isEmpty else { return "供应商未能完成请求，请检查模型、协议、推理设置和 API Key" }
+        return safeDiagnostic(details.joined(separator: " · "), apiKey: apiKey)
+    }
+
+    private static func safeDiagnostic(_ text: String, apiKey: String = "") -> String {
+        var text = text
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !key.isEmpty { text = text.replacingOccurrences(of: key, with: "[已隐藏]") }
+        text = text.replacingOccurrences(of: #"(?i)\bBearer\s+\S+|\bsk-[A-Za-z0-9_-]+"#, with: "[已隐藏]", options: .regularExpression)
+        text = text.components(separatedBy: .controlCharacters).joined(separator: " ")
+        return String(text.prefix(500))
     }
 
     private static func object<T: Encodable>(_ value: T) throws -> Any {

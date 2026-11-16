@@ -72,8 +72,11 @@ struct AIProviderDiagnostics {
         AIProviderTransport.authorize(&request, key: provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines), format: provider.responseFormat)
         let (data, response) = try await session.data(for: request)
         try Task.checkCancellation()
-        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode,
-              let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw AIClientError.invalidResponse }
+        guard let http = response as? HTTPURLResponse else { throw AIClientError.invalidResponse }
+        guard 200..<300 ~= http.statusCode else {
+            throw AIClientError.requestFailed(http.statusCode, AIProviderTransport.failureMessage(data, apiKey: provider.apiKey))
+        }
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw AIClientError.invalidResponse }
         return root
     }
 

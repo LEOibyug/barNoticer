@@ -8,6 +8,7 @@ enum AIAssistantProgress: Equatable {
     case preparingMemoryClear
     case readingTodos
     case preparingActions
+    case correctingToolArguments
 
     var displayText: String {
         switch self {
@@ -25,6 +26,8 @@ enum AIAssistantProgress: Equatable {
             return "查阅事项中..."
         case .preparingActions:
             return "整理操作建议中..."
+        case .correctingToolArguments:
+            return "工具参数纠错中..."
         }
     }
 
@@ -41,7 +44,7 @@ enum AIAssistantProgress: Equatable {
         case "clear_global_memory": return .preparingMemoryClear
         case "list_active_todos", "list_completed_todos", "get_completion_stats", "list_groups":
             return .readingTodos
-        case "create_todo", "update_todo", "complete_todo", "delete_todo", "create_group", "update_group", "delete_group", "save_daily_summary":
+        case "create_todo", "update_todo", "complete_todo", "delete_todo", "create_group", "update_group", "delete_group", "prepare_summary":
             return .preparingActions
         default:
             return .thinking

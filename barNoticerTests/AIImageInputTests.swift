@@ -33,6 +33,7 @@ final class AIImageInputTests: XCTestCase {
         XCTAssertEqual(bitmap.pixelsWide, 2_048)
         XCTAssertEqual(bitmap.pixelsHigh, 1_024)
         XCTAssertTrue(attachment.dataURL.hasPrefix("data:image/jpeg;base64,"))
+        XCTAssertTrue(attachment.preview === attachment.preview)
         XCTAssertThrowsError(try AIImageAttachment(data: Data("not an image".utf8), name: "bad.png"))
         XCTAssertThrowsError(try AIImageAttachment(data: Data(count: 21 * 1_024 * 1_024), name: "large.png"))
     }

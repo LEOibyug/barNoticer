@@ -147,8 +147,8 @@ enum TodoScheduleCommitter {
             return .itemDeleted
         }
 
-        if !force, let baseline = draft.baseline {
-            let conflicts = conflictingFields(draft: draft, baseline: baseline, item: item)
+        if !force {
+            let conflicts = conflictingFields(draft: draft, item: item)
             if !conflicts.isEmpty {
                 return .conflict(fields: conflicts)
             }
@@ -162,6 +162,11 @@ enum TodoScheduleCommitter {
         }
         draft = TodoScheduleDraft(item: item)
         return .saved
+    }
+
+    static func conflictingFields(draft: TodoScheduleDraft, item: TodoItem) -> [String] {
+        guard let baseline = draft.baseline else { return [] }
+        return conflictingFields(draft: draft, baseline: baseline, item: item)
     }
 
     private static func conflictingFields(draft: TodoScheduleDraft, baseline: TodoScheduleDraft.Baseline, item: TodoItem) -> [String] {
@@ -186,7 +191,7 @@ enum TodoScheduleCommitter {
         return fields
     }
 
-    private static func applyUserEdits(_ draft: TodoScheduleDraft, to item: TodoItem) {
+    static func applyUserEdits(_ draft: TodoScheduleDraft, to item: TodoItem) {
         if let baseline = draft.baseline, draft.effectivePayload == baseline.schedule {
             // 日程未被用户编辑：不写回，保留外部变化和重复推进记录。
         } else {
@@ -214,6 +219,104 @@ enum TodoScheduleCommitter {
         } ?? true
         if reminderWasEdited, draft.effectiveReminderMinutesBefore != item.reminderMinutesBefore {
             item.updateReminder(minutesBefore: draft.effectiveReminderMinutesBefore)
+        }
+    }
+}
+
+/// 事项设置表单草稿：统一承载标题、备注与日程的打开基线，支持字段级并发冲突检测。
+struct TodoItemEditDraft {
+    var title = ""
+    var note = ""
+    var schedule = TodoScheduleDraft()
+    var titleBaseline = ""
+    var noteBaseline: String?
+
+    init() {}
+
+    @MainActor
+    init(item: TodoItem) {
+        self.title = item.title
+        self.note = item.note ?? ""
+        self.schedule = TodoScheduleDraft(item: item)
+        self.titleBaseline = item.title
+        self.noteBaseline = Self.normalizedNote(item.note)
+    }
+
+    static func normalizedNote(_ raw: String?) -> String? {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+@MainActor
+enum TodoEditCommitter {
+    static func commit(
+        _ draft: inout TodoItemEditDraft,
+        into item: TodoItem,
+        context: ModelContext,
+        force: Bool = false
+    ) -> TodoScheduleCommitter.Outcome {
+        guard !item.isDeleted, item.modelContext != nil else {
+            return .itemDeleted
+        }
+
+        let trimmedTitle = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidateTitle = trimmedTitle.isEmpty ? nil : trimmedTitle
+        let candidateNote = TodoItemEditDraft.normalizedNote(draft.note)
+        let currentNote = TodoItemEditDraft.normalizedNote(item.note)
+
+        if !force {
+            var conflicts: [String] = []
+            if let candidateTitle,
+               candidateTitle != draft.titleBaseline,
+               item.title != draft.titleBaseline,
+               item.title != candidateTitle {
+                conflicts.append("标题")
+            }
+            if candidateNote != draft.noteBaseline,
+               currentNote != draft.noteBaseline,
+               currentNote != candidateNote {
+                conflicts.append("备注")
+            }
+            conflicts.append(contentsOf: TodoScheduleCommitter.conflictingFields(draft: draft.schedule, item: item))
+            if !conflicts.isEmpty {
+                return .conflict(fields: conflicts)
+            }
+        }
+
+        if let candidateTitle, candidateTitle != draft.titleBaseline, candidateTitle != item.title {
+            item.updateTitle(candidateTitle)
+        }
+        if candidateNote != draft.noteBaseline, candidateNote != currentNote {
+            item.updateNote(candidateNote)
+        }
+        TodoScheduleCommitter.applyUserEdits(draft.schedule, to: item)
+
+        do {
+            try context.save()
+        } catch {
+            return .saveFailed(error.localizedDescription)
+        }
+        draft = TodoItemEditDraft(item: item)
+        return .saved
+    }
+}
+
+@MainActor
+enum ModelContextPersistence {
+    @discardableResult
+    static func save(_ context: ModelContext, category: String, action: String) -> String? {
+        do {
+            try context.save()
+            return nil
+        } catch {
+            try? AppDebugLogStore.shared.write(
+                .error,
+                category: category,
+                message: "\(action)失败",
+                metadata: ["error": error.localizedDescription]
+            )
+            return "\(action)失败：\(error.localizedDescription)"
         }
     }
 }

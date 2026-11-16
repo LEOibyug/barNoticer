@@ -12,6 +12,7 @@ struct AISettings: Equatable {
     static let requiresActionConfirmationKey = "AISettingsRequiresActionConfirmation"
 
     var responseFormat: AIResponseFormat = .chatCompletions
+    var reasoningEffort: AIReasoningEffort?
     var providerRoutes: [AIProviderConfiguration]?
     var baseURL: URL
     var model: String
@@ -23,9 +24,11 @@ struct AISettings: Equatable {
         model: String = Self.defaultModel,
         shortcut: AIKeyboardShortcut = .default,
         requiresActionConfirmation: Bool = true,
-        responseFormat: AIResponseFormat = .chatCompletions
+        responseFormat: AIResponseFormat = .chatCompletions,
+        reasoningEffort: AIReasoningEffort? = nil
     ) {
         self.responseFormat = responseFormat
+        self.reasoningEffort = reasoningEffort
         self.baseURL = baseURL
         self.model = model
         self.shortcut = shortcut
@@ -50,6 +53,7 @@ struct AISettings: Equatable {
                 baseURL = active.settings.baseURL
                 model = active.settings.model
                 responseFormat = active.responseFormat
+                reasoningEffort = active.reasoningEffort
             }
         }
     }
@@ -90,7 +94,7 @@ struct AISettingsDraft {
         self.defaults = defaults
         self.keyStore = keyStore
         let settings = AISettings(defaults: defaults)
-        collection = AIProviderCollection.load(from: defaults)
+        collection = AIProviderCollection.load(from: defaults, keyStore: keyStore)
         editingID = collection.activeID
         shortcut = settings.shortcut
         requiresActionConfirmation = settings.requiresActionConfirmation
@@ -135,7 +139,7 @@ struct AISettingsDraft {
     mutating func reload() {
         isLoading = true
         let stored = AISettings(defaults: defaults)
-        collection = AIProviderCollection.load(from: defaults)
+        collection = AIProviderCollection.load(from: defaults, keyStore: keyStore)
         if !collection.providers.contains(where: { $0.id == editingID }) { editingID = collection.activeID }
         shortcut = stored.shortcut
         requiresActionConfirmation = stored.requiresActionConfirmation
@@ -144,11 +148,10 @@ struct AISettingsDraft {
 
     private func saveIfLoaded() {
         guard !isLoading else { return }
-        collection.save(to: defaults)
+        collection.save(to: defaults, keyStore: keyStore)
         var active = collection.active?.settings ?? AISettings()
         active.shortcut = shortcut
         active.requiresActionConfirmation = requiresActionConfirmation
-        keyStore.saveAPIKey(collection.active?.apiKey ?? "")
         active.save(to: defaults)
     }
 }

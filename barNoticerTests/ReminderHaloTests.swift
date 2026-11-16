@@ -24,6 +24,54 @@ final class ReminderHaloTests: XCTestCase {
         XCTAssertLessThanOrEqual(panel.frame.maxX, visible.maxX - 12)
     }
 
+    func testShortRemindersStayCompactAndLongTextKeepsTheSameTopAnchor() async throws {
+        var frames: [CGRect] = []
+        for message in ["检查接口兼容性与工具调用结果。", Array(repeating: "较长的提醒内容应在安全区域内滚动阅读。", count: 40).joined(separator: "\n")] {
+            let fixture = try Fixture(reduceMotion: true)
+            defer { fixture.close() }
+            let prior = Set(NSApp.windows.map(ObjectIdentifier.init))
+            fixture.presenter.present(decision: ReminderDecision(shouldRemind: true, message: message,
+                todoReferences: [], snoozeSuggestion: nil), trigger: .aiPoll,
+                settings: ReminderSettings(systemNotificationsEnabled: false))
+            for _ in 0..<100 {
+                if NSApp.windows.contains(where: { !prior.contains(ObjectIdentifier($0)) && $0.isVisible }) { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let panel = try XCTUnwrap(NSApp.windows.first { !prior.contains(ObjectIdentifier($0)) && $0.isVisible })
+            frames.append(panel.frame)
+            XCTAssertFalse(panel.isKeyWindow)
+            XCTAssertGreaterThanOrEqual(panel.frame.minY, try XCTUnwrap(panel.screen).visibleFrame.minY)
+        }
+        XCTAssertLessThan(frames[0].height, frames[1].height)
+        XCTAssertEqual(frames[0].maxY, frames[1].maxY, accuracy: 1)
+        XCTAssertEqual(frames[0].width, frames[1].width)
+    }
+
+    func testScreenRefreshKeepsReminderOnItsDisplayAndRestoresConfiguredPosition() throws {
+        let fixture = try Fixture(reduceMotion: true)
+        defer { fixture.close() }
+        let settings = ReminderSettings(reminderPanelOffsetX: 24, reminderPanelOffsetY: 18,
+            reminderPanelWidth: 420)
+        settings.save(to: fixture.defaults)
+        let prior = Set(NSApp.windows.map(ObjectIdentifier.init))
+        let selected = try XCTUnwrap(NSScreen.screens.first {
+            NSMouseInRect(NSEvent.mouseLocation, $0.frame, false)
+        } ?? NSScreen.main)
+        fixture.notifications.post(name: ReminderSettings.panelPreviewDidChangeNotification, object: nil)
+        let panel = try XCTUnwrap(NSApp.windows.first {
+            !prior.contains(ObjectIdentifier($0)) && $0.isVisible && !$0.ignoresMouseEvents
+        })
+        panel.contentView?.layoutSubtreeIfNeeded()
+        let original = panel.frame
+        XCTAssertEqual(panel.screen?.frame, selected.frame)
+        XCTAssertEqual(original.width, min(420, selected.visibleFrame.width - 24), accuracy: 1)
+        panel.setFrameOrigin(NSPoint(x: selected.visibleFrame.maxX - 60, y: selected.visibleFrame.minY - 60))
+        NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        XCTAssertEqual(panel.frame, original)
+        XCTAssertGreaterThanOrEqual(panel.frame.minY, selected.visibleFrame.minY + 12)
+        XCTAssertLessThanOrEqual(panel.frame.maxX, selected.visibleFrame.maxX - 12)
+    }
+
     func testReducedMotionPreviewShowsContentWithoutHalo() async throws {
         let fixture = try Fixture(reduceMotion: true)
         defer { fixture.close() }
@@ -33,7 +81,10 @@ final class ReminderHaloTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(50))
         let windows = NSApp.windows.filter { !prior.contains(ObjectIdentifier($0)) && $0.isVisible }
         XCTAssertFalse(windows.contains { $0.ignoresMouseEvents }, "Reduced-motion preview must not create an animated halo")
-        XCTAssertTrue(windows.contains { !$0.ignoresMouseEvents && $0.level == .statusBar }, "Content must appear without the glow delay")
+        let content = try XCTUnwrap(windows.first { !$0.ignoresMouseEvents && $0.level == .statusBar },
+            "Content must appear without the glow delay")
+        XCTAssertFalse(content.isKeyWindow, "A reminder must not steal typing focus")
+        XCTAssertTrue(NotchPopupPresence.isPresenting, "A visible reminder must suppress the hover island")
     }
 
     func testStaticPreviewIsVisibleAndExpansionChangesItsDrawnExtent() throws {
@@ -71,7 +122,10 @@ final class ReminderHaloTests: XCTestCase {
         settings.haloBoundary = ReminderHaloBoundary(isCustom: true, offsetX: 21, offsetY: 35,
             width: 310, height: 54, cornerRadius: 12)
         settings.save(to: fixture.defaults)
-        let expected = settings.haloBoundaryFrame(in: try XCTUnwrap(NSScreen.main).frame,
+        let screen = try XCTUnwrap(NSScreen.screens.first {
+            NSMouseInRect(NSEvent.mouseLocation, $0.frame, false)
+        } ?? NSScreen.main)
+        let expected = settings.haloBoundaryFrame(in: screen.frame,
             islandLayout: IslandLayoutSettings(defaults: fixture.defaults))
         for notification in [ReminderSettings.boundaryPreviewDidChangeNotification, ReminderSettings.previewDidChangeNotification] {
             fixture.notifications.post(name: ReminderSettings.previewDidEndNotification, object: nil)
@@ -119,12 +173,16 @@ final class ReminderHaloTests: XCTestCase {
             trigger()
             try await Task.sleep(for: .milliseconds(400))
             XCTAssertFalse(contentIsVisible(), "Content must not cover the initial halo")
-            XCTAssertTrue(NSApp.windows.contains { !prior.contains(ObjectIdentifier($0)) && $0.isVisible
+            let halo = try XCTUnwrap(NSApp.windows.first { !prior.contains(ObjectIdentifier($0)) && $0.isVisible
                 && ($0.contentView as? ReminderHaloView)?.isPreview == false })
+            let haloScreen = halo.screen?.frame
             for _ in 0..<100 where !contentIsVisible() {
                 try await Task.sleep(for: .milliseconds(20))
             }
             XCTAssertTrue(contentIsVisible(), "Content must appear after the halo")
+            let contentPanel = try XCTUnwrap(NSApp.windows.first { !prior.contains(ObjectIdentifier($0))
+                && $0.isVisible && !$0.ignoresMouseEvents && $0.level == .statusBar })
+            XCTAssertEqual(contentPanel.screen?.frame, haloScreen, "Flash and content must stay on the same display")
             fixture.notifications.post(name: ReminderSettings.previewDidEndNotification, object: nil)
             try await Task.sleep(for: .milliseconds(350))
         }

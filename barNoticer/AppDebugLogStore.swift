@@ -1,13 +1,16 @@
 import Foundation
 
-struct AppDebugLogStore {
-    enum Level: String {
+nonisolated struct AppDebugLogStore: Sendable {
+    enum Level: String, Sendable {
         case debug = "DEBUG"
         case info = "INFO"
         case error = "ERROR"
     }
 
     static let shared = AppDebugLogStore()
+    private static let ioLock = NSLock()
+    private static let retentionCleanupInterval: TimeInterval = 1_800
+    private static var lastRetentionCleanupAt: [String: Date] = [:]
 
     let directory: URL
     let retentionDays: Int
@@ -33,39 +36,49 @@ struct AppDebugLogStore {
         message: String,
         metadata: [String: String] = [:]
     ) throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try cleanupIfNeeded()
+        try Self.ioLock.withLock {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            cleanupIfNeeded()
 
-        let line = [
-            Self.timestampFormatter.string(from: Date()),
-            "[\(level.rawValue)]",
-            "[\(sanitize(category))]",
-            sanitize(message),
-            format(metadata: metadata)
-        ]
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-            + "\n"
+            let line = [
+                Self.timestampFormatter.string(from: Date()),
+                "[\(level.rawValue)]",
+                "[\(sanitize(category))]",
+                sanitize(message),
+                format(metadata: metadata)
+            ]
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+                + "\n"
 
-        let data = Data(line.utf8)
-        if FileManager.default.fileExists(atPath: logFileURL.path) {
-            let handle = try FileHandle(forWritingTo: logFileURL)
-            try handle.seekToEnd()
-            try handle.write(contentsOf: data)
-            try handle.close()
-        } else {
-            try data.write(to: logFileURL, options: .atomic)
+            let data = Data(line.utf8)
+            if FileManager.default.fileExists(atPath: logFileURL.path) {
+                let handle = try FileHandle(forWritingTo: logFileURL)
+                defer { try? handle.close() }
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+            } else {
+                try data.write(to: logFileURL, options: .atomic)
+            }
         }
     }
 
-    private func cleanupIfNeeded() throws {
+    private func cleanupIfNeeded() {
         if let attributes = try? FileManager.default.attributesOfItem(atPath: logFileURL.path),
            let size = attributes[.size] as? UInt64,
            size > maxFileSize {
             try? FileManager.default.removeItem(at: logFileURL)
         }
 
-        let cutoff = Date().addingTimeInterval(-Double(retentionDays) * 86_400)
+        let now = Date()
+        let pathKey = directory.path
+        if let lastCleanup = Self.lastRetentionCleanupAt[pathKey],
+           now.timeIntervalSince(lastCleanup) < Self.retentionCleanupInterval {
+            return
+        }
+        Self.lastRetentionCleanupAt[pathKey] = now
+
+        let cutoff = now.addingTimeInterval(-Double(retentionDays) * 86_400)
         let files = (try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: [.contentModificationDateKey]

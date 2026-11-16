@@ -34,6 +34,42 @@ final class AISettingsTests: XCTestCase {
         XCTAssertEqual(keyStore.readAPIKey(), "test-api-key-auto")
     }
 
+    func testExistingProviderCollectionKeepsProfilesAndPersistsIndependentReasoningEfforts() throws {
+        let suiteName = "AIReasoningSettingsTests-\(UUID())"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let firstID = UUID(), secondID = UUID()
+        let legacy: [String: Any] = ["activeID": firstID.uuidString, "mode": "ordered", "providers": [
+            ["id": firstID.uuidString, "name": "Existing", "baseURL": "https://first.example/v1",
+             "responseFormat": "responses", "apiKey": "first-secret", "model": "first-model"],
+            ["id": secondID.uuidString, "name": "Other", "baseURL": "https://second.example/v1",
+             "responseFormat": "chatCompletions", "apiKey": "second-secret", "model": "second-model"]
+        ]]
+        defaults.set(try JSONSerialization.data(withJSONObject: legacy), forKey: AIProviderCollection.storageKey)
+        let migrated = AIProviderCollection.load(from: defaults)
+        XCTAssertEqual(migrated.providers.map(\.id), [firstID, secondID])
+        XCTAssertEqual(migrated.providers.map(\.apiKey), ["first-secret", "second-secret"])
+        let scrubbedRaw = String(decoding: try XCTUnwrap(defaults.data(forKey: AIProviderCollection.storageKey)), as: UTF8.self)
+        XCTAssertFalse(scrubbedRaw.contains("first-secret"))
+        XCTAssertFalse(scrubbedRaw.contains("second-secret"))
+        XCTAssertTrue(migrated.providers.allSatisfy { $0.reasoningEffort == nil })
+        XCTAssertEqual(migrated.mode, .ordered)
+
+        var draft = AISettingsDraft(defaults: defaults, keyStore: AIAPIKeyStore(defaults: defaults))
+        draft.provider.reasoningEffort = .high
+        draft.editingID = secondID
+        draft.provider.reasoningEffort = AIReasoningEffort.none
+        var restored = AISettings(defaults: defaults)
+        XCTAssertEqual(restored.providerRoutes?.map(\.reasoningEffort), [.high, AIReasoningEffort.none])
+        XCTAssertEqual(restored.reasoningEffort, .high)
+        XCTAssertEqual(AIProviderCollection.load(from: defaults).activeID, firstID)
+
+        draft.provider.reasoningEffort = nil
+        restored = AISettings(defaults: defaults)
+        XCTAssertNil(restored.providerRoutes?.last?.reasoningEffort)
+        XCTAssertEqual(restored.providerRoutes?.map(\.model), ["first-model", "second-model"])
+    }
+
     func testDefaultSettingsUseOpenAICompatibleChatCompletions() {
         let settings = AISettings()
 
@@ -95,20 +131,56 @@ final class AISettingsTests: XCTestCase {
         XCTAssertEqual(object?["max_tokens"] as? Int, 12)
     }
 
-    func testAPIKeyStorePersistsInApplicationDefaults() {
+    func testAPIKeyStoreKeepsSecretsOutOfUserDefaultsAndMigratesLegacyKeys() throws {
         let suiteName = "AIAPIKeyStoreTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
+        let credentialDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AIAPIKeyStoreTests-\(UUID().uuidString)", isDirectory: true)
         defer {
             defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: credentialDir)
         }
-        let store = AIAPIKeyStore(defaults: defaults)
+        let store = AIAPIKeyStore(defaults: defaults, directoryURL: credentialDir)
 
         XCTAssertEqual(store.readAPIKey(), "")
 
         store.saveAPIKey("test-api-key-local")
 
         XCTAssertEqual(store.readAPIKey(), "test-api-key-local")
-        XCTAssertEqual(defaults.string(forKey: AIAPIKeyStore.apiKeyKey), "test-api-key-local")
+        XCTAssertNil(defaults.string(forKey: AIAPIKeyStore.apiKeyKey))
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: store.credentialFileURL.path)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
+        XCTAssertEqual(permissions, 0o600)
+        let values = try store.credentialFileURL.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        XCTAssertEqual(values.isExcludedFromBackup, true)
+
+        // 旧版 UserDefaults 明文 Key 在读取时自动迁移并清除明文。
+        defaults.set("legacy-plaintext-key", forKey: AIAPIKeyStore.apiKeyKey)
+        XCTAssertEqual(store.readAPIKey(), "legacy-plaintext-key")
+        XCTAssertNil(defaults.string(forKey: AIAPIKeyStore.apiKeyKey))
+
+        // 供应商配置中的 apiKey 不以明文留在 UserDefaults JSON 中。
+        let providerID = UUID()
+        let collection = AIProviderCollection(
+            providers: [AIProviderConfiguration(id: providerID, name: "P1", baseURL: "https://example.com/v1", apiKey: "provider-secret", model: "m")],
+            activeID: providerID
+        )
+        collection.save(to: defaults, keyStore: store)
+        let rawData = try XCTUnwrap(defaults.data(forKey: AIProviderCollection.storageKey))
+        let rawString = String(decoding: rawData, as: UTF8.self)
+        XCTAssertFalse(rawString.contains("provider-secret"))
+        XCTAssertEqual(AIProviderCollection.load(from: defaults, keyStore: store).providers.first?.apiKey, "provider-secret")
+
+        // 移除供应商后同步清理对应凭据。
+        let remainingID = UUID()
+        let updatedCollection = AIProviderCollection(
+            providers: [AIProviderConfiguration(id: remainingID, name: "P2", baseURL: "https://example.com/v1", apiKey: "next-secret", model: "m")],
+            activeID: remainingID
+        )
+        updatedCollection.save(to: defaults, keyStore: store)
+        XCTAssertEqual(store.readAPIKey(for: providerID), "")
+        XCTAssertEqual(store.readAPIKey(for: remainingID), "next-secret")
     }
 
     func testChatRequestPreservesAssistantReasoningContent() throws {

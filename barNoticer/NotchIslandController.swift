@@ -13,6 +13,9 @@ final class NotchIslandController: NSObject {
     private var isPointerInHotZone = false
     private var layoutSettings = IslandLayoutSettings(defaults: .standard)
     private var isPreviewingIsland = false
+    private var activeScreenNumber: NSNumber?
+    private var previewScreenNumber: NSNumber?
+    private var lastPolledMouseLocation: NSPoint?
     private var panelState = IslandPanelState()
     private let contentVisibility = IslandContentVisibilityModel()
     private let showTimingFunction = CAMediaTimingFunction(controlPoints: 0.16, 0.92, 0.18, 1)
@@ -29,6 +32,10 @@ final class NotchIslandController: NSObject {
         self.modelContainer = modelContainer
         super.init()
 
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(popupPresenceChanged),
+            name: NotchPopupPresence.didChangeNotification, object: nil
+        )
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(screenParametersChanged),
@@ -66,6 +73,11 @@ final class NotchIslandController: NSObject {
     }
 
     func showIsland() {
+        showIsland(on: ScreenTargeting.currentPointerScreen())
+    }
+
+    private func showIsland(on screen: NSScreen?) {
+        guard !NotchPopupPresence.isPresenting else { return }
         if islandPanel == nil {
             installIslandPanel()
         }
@@ -76,8 +88,9 @@ final class NotchIslandController: NSObject {
 
         hideWorkItem?.cancel()
         hideWorkItem = nil
+        activeScreenNumber = ScreenTargeting.screenNumber(of: screen ?? ScreenTargeting.currentPointerScreen())
 
-        let plan = expansionPlan()
+        let plan = expansionPlan(on: currentActiveScreen())
         let contentView = islandPanel.contentView
 
         islandPanel.setFrame(plan.startFrame, display: true)
@@ -142,10 +155,11 @@ final class NotchIslandController: NSObject {
         guard let islandPanel else { return }
         guard !panelState.shouldUseCollapsedHitTesting else { return }
 
+        let screen = currentActiveScreen()
         let mouseLocation = NSEvent.mouseLocation
         let decision = IslandAutoHidePolicy.decision(
             pointerInIsland: islandPanel.frame.contains(mouseLocation),
-            pointerInHotZone: hotZoneFrame().contains(mouseLocation),
+            pointerInHotZone: hotZoneFrame(on: screen).contains(mouseLocation),
             isPreviewingIsland: isPreviewingIsland
         )
 
@@ -159,7 +173,7 @@ final class NotchIslandController: NSObject {
         }
 
         let transition = panelState.beginHiding(suppressShowingDuration: hideAnimation.duration + hideInterruptionSuppression)
-        let plan = expansionPlan()
+        let plan = expansionPlan(on: screen)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = MotionPreferences.reduceMotion ? 0 : hideAnimation.duration
             context.timingFunction = hideAnimation.timingFunction
@@ -171,6 +185,8 @@ final class NotchIslandController: NSObject {
                 islandPanel.orderOut(nil)
                 islandPanel.setFrame(plan.endFrame, display: false)
                 self.setIslandContentVisibility(true)
+                self.activeScreenNumber = nil
+                self.lastPolledMouseLocation = nil
                 if islandPanel === self.islandPanel {
                     self.islandPanel = nil
                 }
@@ -248,20 +264,48 @@ final class NotchIslandController: NSObject {
         pollPointerLocation()
     }
 
+    @objc private func popupPresenceChanged() {
+        guard NotchPopupPresence.isPresenting else { return }
+        hideWorkItem?.cancel()
+        hideWorkItem = nil
+        isPointerInHotZone = false
+        isPreviewingIsland = false
+        activeScreenNumber = nil
+        lastPolledMouseLocation = nil
+        guard let islandPanel else { return }
+        let transition = panelState.beginHiding(suppressShowingDuration: 0)
+        _ = panelState.finishHiding(transition)
+        islandPanel.orderOut(nil)
+        self.islandPanel = nil
+        setIslandContentVisibility(true)
+    }
+
     private func pollPointerLocation() {
-        guard !isPreviewingIsland else { return }
+        guard !isPreviewingIsland, !NotchPopupPresence.isPresenting else { return }
         if pointerPollTimer?.isValid != true {
             startPointerPolling()
         }
 
         let mouseLocation = NSEvent.mouseLocation
-        let pointerInHotZone = hotZoneFrame().contains(mouseLocation)
-        let pointerInIslandFrame = panelState.shouldUseCollapsedHitTesting ? collapsedIslandFrame() : islandPanel?.frame
-        let pointerInIsland = islandPanel?.isVisible == true && pointerInIslandFrame?.contains(mouseLocation) == true
+        let isVisible = islandPanel?.isVisible == true
+        // 指针静止且面板处于收起空闲态时跳过屏幕遍历与矩形计算。
+        if !isVisible, !isPointerInHotZone, lastPolledMouseLocation == mouseLocation {
+            return
+        }
+        lastPolledMouseLocation = mouseLocation
+
+        let targetScreen = isVisible
+            ? currentActiveScreen()
+            : ScreenTargeting.screen(at: mouseLocation)
+        let pointerInHotZone = hotZoneFrame(on: targetScreen).contains(mouseLocation)
+        let pointerInIslandFrame = panelState.shouldUseCollapsedHitTesting
+            ? collapsedIslandFrame(on: targetScreen)
+            : islandPanel?.frame
+        let pointerInIsland = isVisible && pointerInIslandFrame?.contains(mouseLocation) == true
 
         if pointerInHotZone {
             isPointerInHotZone = true
-            showIsland()
+            showIsland(on: targetScreen)
             return
         }
 
@@ -271,7 +315,7 @@ final class NotchIslandController: NSObject {
             return
         }
 
-        if islandPanel?.isVisible == true && !pointerInIsland {
+        if isVisible && !pointerInIsland {
             scheduleHideIsland()
         }
     }
@@ -316,7 +360,7 @@ final class NotchIslandController: NSObject {
     }
 
     private func positionIslandPanel() {
-        islandPanel?.setFrame(islandFrame(), display: true)
+        islandPanel?.setFrame(islandFrame(on: currentActiveScreen()), display: true)
     }
 
     private func animateIslandPanelToCurrentFrameIfVisible() {
@@ -328,33 +372,46 @@ final class NotchIslandController: NSObject {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = MotionPreferences.reduceMotion ? 0 : resizeAnimation.duration
             context.timingFunction = resizeAnimation.timingFunction
-            islandPanel.animator().setFrame(islandFrame(), display: true)
+            islandPanel.animator().setFrame(islandFrame(on: currentActiveScreen()), display: true)
         }
     }
 
     private func positionHotZonePreviewPanel() {
-        hotZonePreviewPanel?.setFrame(hotZoneFrame(), display: true)
+        hotZonePreviewPanel?.setFrame(hotZoneFrame(on: currentPreviewScreen()), display: true)
         hotZonePreviewPanel?.contentView?.frame = hotZonePreviewPanel?.contentView?.bounds ?? .zero
     }
 
-    private func hotZoneFrame() -> CGRect {
-        frame { $0.hotZoneFrame(in: $1) }
+    private func hotZoneFrame(on screen: NSScreen? = nil) -> CGRect {
+        frame(on: screen) { $0.hotZoneFrame(in: $1) }
     }
 
-    private func islandFrame() -> CGRect {
-        frame { $0.islandFrame(in: $1) }
+    private func islandFrame(on screen: NSScreen? = nil) -> CGRect {
+        frame(on: screen) { $0.islandFrame(in: $1) }
     }
 
-    private func collapsedIslandFrame() -> CGRect {
-        frame { $0.collapsedIslandFrame(in: $1) }
+    private func collapsedIslandFrame(on screen: NSScreen? = nil) -> CGRect {
+        frame(on: screen) { $0.collapsedIslandFrame(in: $1) }
     }
 
-    private func expansionPlan() -> IslandExpansionPlan {
-        IslandExpansionPlan(settings: layoutSettings, screenFrame: NSScreen.main?.frame ?? .zero)
+    private func expansionPlan(on screen: NSScreen? = nil) -> IslandExpansionPlan {
+        IslandExpansionPlan(settings: layoutSettings, screenFrame: (screen ?? currentActiveScreen())?.frame ?? .zero)
     }
 
-    private func frame(_ resolve: (IslandLayoutSettings, CGRect) -> CGRect) -> CGRect {
-        resolve(layoutSettings, NSScreen.main?.frame ?? .zero)
+    private func frame(on screen: NSScreen? = nil, _ resolve: (IslandLayoutSettings, CGRect) -> CGRect) -> CGRect {
+        resolve(layoutSettings, (screen ?? currentActiveScreen())?.frame ?? .zero)
+    }
+
+    private func currentActiveScreen() -> NSScreen? {
+        ScreenTargeting.resolvedScreen(pinnedNumber: &activeScreenNumber)
+    }
+
+    private func currentPreviewScreen() -> NSScreen? {
+        if let screen = ScreenTargeting.screen(forScreenNumber: previewScreenNumber) {
+            return screen
+        }
+        let preferred = mainWindow?.screen ?? NSApp.keyWindow?.screen ?? ScreenTargeting.currentPointerScreen()
+        previewScreenNumber = ScreenTargeting.screenNumber(of: preferred)
+        return preferred
     }
 
     private func setIslandContentVisibility(_ isVisible: Bool, animated: Bool = false) {
@@ -368,11 +425,13 @@ final class NotchIslandController: NSObject {
     }
 
     @objc private func screenParametersChanged() {
+        lastPolledMouseLocation = nil
         positionIslandPanel()
         positionHotZonePreviewPanel()
     }
 
     @objc private func layoutSettingsChanged() {
+        lastPolledMouseLocation = nil
         layoutSettings = IslandLayoutSettings(defaults: .standard)
         animateIslandPanelToCurrentFrameIfVisible()
         positionHotZonePreviewPanel()
@@ -394,6 +453,7 @@ final class NotchIslandController: NSObject {
 
     @objc private func layoutPreviewEnded() {
         hideHotZonePreview()
+        previewScreenNumber = nil
         if isPreviewingIsland {
             isPreviewingIsland = false
             scheduleHideIsland()
@@ -415,7 +475,7 @@ final class NotchIslandController: NSObject {
         hideWorkItem?.cancel()
         hideWorkItem = nil
         isPreviewingIsland = true
-        showIsland()
+        showIsland(on: currentPreviewScreen())
     }
 }
 

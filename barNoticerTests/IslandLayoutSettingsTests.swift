@@ -175,4 +175,14 @@ final class IslandLayoutSettingsTests: XCTestCase {
             IslandWideGroupLayoutPolicy.columnWidth(availableWidth: availableWidth) * 4 + IslandWideGroupLayoutPolicy.columnSpacing * 3
         )
     }
+
+    func testScreenTargetingSelectsDisplayContainingPointerAndFallsBack() {
+        let builtIn = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let external = CGRect(x: 1512, y: 0, width: 2560, height: 1440)
+        let frames = [builtIn, external]
+
+        XCTAssertEqual(ScreenTargeting.screenFrame(at: CGPoint(x: 756, y: 970), in: frames, fallback: builtIn), builtIn)
+        XCTAssertEqual(ScreenTargeting.screenFrame(at: CGPoint(x: 2792, y: 1420), in: frames, fallback: builtIn), external)
+        XCTAssertEqual(ScreenTargeting.screenFrame(at: CGPoint(x: -50, y: -50), in: frames, fallback: builtIn), builtIn)
+    }
 }

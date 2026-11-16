@@ -6,11 +6,17 @@ struct ContentView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query private var todoItems: [TodoItem]
     @Query private var storedGroups: [TodoGroup]
+    private let summaryStore: SummaryStore
 
     @State private var draftGroupName = ""
     @State private var selection: SidebarSelection? = .filter(.active)
     @State private var isShowingGroupCreator = false
     @State private var draggedGroupID: UUID?
+    @State private var saveErrorMessage: String?
+
+    init(summaryStore: SummaryStore? = nil) {
+        self.summaryStore = summaryStore ?? .shared
+    }
 
     private var groups: [TodoGroup] {
         TodoGroupResolver.normalizedGroups(storedGroups)
@@ -30,7 +36,7 @@ struct ContentView: View {
             }
         case let .group(groupID)?:
             filtered = todoItems.filter { TodoGroupResolver.group(for: $0, groups: groups).id == groupID }
-        case .islandSettings, .aiSettings, .reminderSettings, .appSettings, .none:
+        case .summaries, .islandSettings, .aiSettings, .reminderSettings, .appSettings, .none:
             filtered = todoItems
         }
         return TodoSorter.sorted(filtered, groups: groups)
@@ -97,6 +103,9 @@ struct ContentView: View {
                 .navigationTitle(detailTitle)
                 .navigationSubtitle(detailSubtitle)
                 .toolbar { detailToolbar }
+            case .summaries:
+                SummaryLibraryView(summaryStore: summaryStore)
+                    .frame(minWidth: 560, minHeight: 440)
             case .islandSettings:
                 IslandSettingsView()
                     .frame(minWidth: 560, minHeight: 440)
@@ -112,6 +121,17 @@ struct ContentView: View {
             case nil:
                 Color.clear
             }
+        }
+        .alert(
+            "保存失败",
+            isPresented: Binding(
+                get: { saveErrorMessage != nil },
+                set: { if !$0 { saveErrorMessage = nil } }
+            )
+        ) {
+            Button("好", role: .cancel) { saveErrorMessage = nil }
+        } message: {
+            Text(saveErrorMessage ?? "")
         }
     }
 
@@ -133,6 +153,10 @@ struct ContentView: View {
                     .dropDestination(for: String.self) { droppedIDs, _ in
                         return reorderGroupToEnd(from: droppedIDs)
                     }
+            }
+
+            Section("记录") {
+                sidebarButton(.summaries, title: "总结", systemImage: "doc.text")
             }
 
             Section("偏好") {
@@ -268,7 +292,7 @@ struct ContentView: View {
                 get: { group.name },
                 set: {
                     group.update(name: $0)
-                    try? modelContext.save()
+                    saveContext(action: "保存分组名称")
                 }
             ))
             .textFieldStyle(.roundedBorder)
@@ -279,7 +303,7 @@ struct ContentView: View {
                 get: { group.colorHex },
                 set: {
                     group.update(colorHex: $0)
-                    try? modelContext.save()
+                    saveContext(action: "保存分组颜色")
                 }
             )) {
                 ForEach(TodoGroup.presetColorHexes, id: \.self) { hex in
@@ -359,17 +383,20 @@ struct ContentView: View {
             sortOrder: TodoGroupResolver.nextSortOrder(in: groups)
         )
         modelContext.insert(group)
-        try? modelContext.save()
-        draftGroupName = ""
-        isShowingGroupCreator = false
-        selection = .group(group.id)
+        if saveContext(action: "新建分组") {
+            draftGroupName = ""
+            isShowingGroupCreator = false
+            selection = .group(group.id)
+        } else {
+            modelContext.delete(group)
+        }
     }
 
     private func deleteItems(at offsets: IndexSet) {
         for index in offsets {
             modelContext.delete(sortedItems[index])
         }
-        try? modelContext.save()
+        saveContext(action: "删除事项")
     }
 
     private func deleteGroup(_ group: TodoGroup) {
@@ -378,8 +405,9 @@ struct ContentView: View {
             item.updateGroup(nil)
         }
         modelContext.delete(group)
-        try? modelContext.save()
-        selection = .filter(.active)
+        if saveContext(action: "删除分组") {
+            selection = .filter(.active)
+        }
     }
 
     private func reorderGroup(from droppedIDs: [String], near targetGroup: TodoGroup) -> Bool {
@@ -397,7 +425,7 @@ struct ContentView: View {
                 TodoGroupResolver.moveGroup(in: groups, moving: movingID, near: targetGroup.id)
             }
         }
-        try? modelContext.save()
+        saveContext(action: "保存分组排序")
         draggedGroupID = nil
         return true
     }
@@ -416,7 +444,7 @@ struct ContentView: View {
                 TodoGroupResolver.moveGroup(in: groups, moving: movingID, to: groups.count - 1)
             }
         }
-        try? modelContext.save()
+        saveContext(action: "保存分组排序")
         draggedGroupID = nil
         return true
     }
@@ -433,7 +461,16 @@ struct ContentView: View {
         modelContext.insert(TodoItem(title: "整理今天最重要的三件事", priority: .high, deadlineAt: Date().addingTimeInterval(7_200)))
         modelContext.insert(TodoItem(title: "回复项目进展消息", priority: .medium, groupID: work.id))
         modelContext.insert(TodoItem(title: "清理桌面临时文件", priority: .low))
-        try? modelContext.save()
+        saveContext(action: "创建示例待办")
+    }
+
+    @discardableResult
+    private func saveContext(action: String) -> Bool {
+        if let error = ModelContextPersistence.save(modelContext, category: "MainWindow", action: action) {
+            saveErrorMessage = error
+            return false
+        }
+        return true
     }
 }
 

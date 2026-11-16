@@ -31,7 +31,7 @@ enum TodoSorter {
             )
         }
 
-        return decorated.sorted(by: <).map(\.item)
+        return decorated.sorted { $0 < $1 }.map(\.item)
     }
 
     static func priorityGroups(_ items: [TodoItem], now: Date = Date()) -> [TodoPriorityGroup] {

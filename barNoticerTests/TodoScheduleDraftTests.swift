@@ -177,4 +177,54 @@ final class TodoScheduleDraftTests: XCTestCase {
         let draft = TodoScheduleDraft(item: item)
         XCTAssertEqual(draft.scheduledTimes, [only, only.addingTimeInterval(3_600)])
     }
+
+    func testEditCommitterDetectsTitleAndNoteConflictsWithoutPartialMutation() throws {
+        let item = TodoItem(title: "原标题", note: "原备注", deadlineAt: Date.now.addingTimeInterval(86_400))
+        context.insert(item)
+        try context.save()
+
+        var draft = TodoItemEditDraft(item: item)
+        draft.title = "用户新标题"
+        draft.note = "用户新备注"
+
+        // 模拟 AI 在编辑期间修改了备注，同时更改了提醒时间。
+        item.updateNote("AI 备注")
+        item.updateReminder(minutesBefore: 15)
+        try context.save()
+
+        let conflict = TodoEditCommitter.commit(&draft, into: item, context: context)
+        guard case let .conflict(fields) = conflict else {
+            return XCTFail("预期备注冲突，实际 \(conflict)")
+        }
+        XCTAssertEqual(fields, ["备注"])
+        // 冲突时不能把用户标题部分写入模型。
+        XCTAssertEqual(item.title, "原标题")
+        XCTAssertEqual(item.note, "AI 备注")
+        XCTAssertEqual(item.reminderMinutesBefore, 15)
+
+        // 覆盖保存应写入用户标题与备注，同时保留未编辑的外部提醒变更。
+        let forced = TodoEditCommitter.commit(&draft, into: item, context: context, force: true)
+        XCTAssertEqual(forced, .saved)
+        XCTAssertEqual(item.title, "用户新标题")
+        XCTAssertEqual(item.note, "用户新备注")
+        XCTAssertEqual(item.reminderMinutesBefore, 15)
+    }
+
+    func testEditCommitterMergesDisjointTitleAndNoteChanges() throws {
+        let item = TodoItem(title: "旧标题", note: "旧备注")
+        context.insert(item)
+        try context.save()
+
+        var draft = TodoItemEditDraft(item: item)
+        draft.title = "新标题"
+
+        // 外部仅修改了备注，未改标题。
+        item.updateNote("外部新备注")
+        try context.save()
+
+        let outcome = TodoEditCommitter.commit(&draft, into: item, context: context)
+        XCTAssertEqual(outcome, .saved)
+        XCTAssertEqual(item.title, "新标题")
+        XCTAssertEqual(item.note, "外部新备注")
+    }
 }

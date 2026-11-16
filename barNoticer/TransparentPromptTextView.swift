@@ -73,7 +73,7 @@ struct TransparentPromptEditor: NSViewRepresentable {
         // Keep the placeholder inside AppKit's text system so marked text
         // hides it even before the input method updates the SwiftUI bindings.
         field.placeholderAttributedString = NSAttributedString(
-            string: "询问 AI，或写下当日总结",
+            string: "询问 AI，或生成一份总结",
             attributes: [
                 .font: NSFont.systemFont(ofSize: 18, weight: .medium),
                 .foregroundColor: NSColor.secondaryLabelColor
@@ -147,7 +147,6 @@ struct TransparentPromptEditor: NSViewRepresentable {
             isComposingText = textView?.hasMarkedText() == true
             guard !isComposingText else { return }
             text = field.stringValue
-            try? AppDebugLogStore.shared.write(.debug, category: "AIInput", message: "Prompt field changed", metadata: ["length": "\(field.stringValue.count)"])
         }
 
         func controlTextDidBeginEditing(_ notification: Notification) {

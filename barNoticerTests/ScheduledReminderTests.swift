@@ -44,10 +44,10 @@ final class ScheduledReminderTests: XCTestCase {
         draft.reminderMinutesBefore = 120
         XCTAssertEqual(TodoScheduleCommitter.commit(&draft, into: item, context: fixture.container.mainContext), .saved)
         XCTAssertEqual(item.reminderMinutesBefore, 120)
-        try executor.apply(.updateTodo(id: item.id, title: nil, priority: nil, reminderMinutesBefore: 15))
+        try executor.apply(.updateTodo(id: item.id, changes: AITodoUpdate(reminderMinutesBefore: 15)))
         XCTAssertEqual(item.scheduleKind, .recurring)
         XCTAssertEqual(item.reminderMinutesBefore, 15)
-        try executor.apply(.updateTodo(id: item.id, title: nil, priority: nil, clearsReminder: true))
+        try executor.apply(.updateTodo(id: item.id, changes: AITodoUpdate(clearsReminder: true)))
         XCTAssertNil(item.reminderMinutesBefore)
         XCTAssertEqual(item.scheduleKind, .recurring)
     }
@@ -174,8 +174,8 @@ final class ScheduledReminderTests: XCTestCase {
         let item = TodoItem(title: "自动", recurrenceRule: .daily, recurrenceAnchor: Date().addingTimeInterval(-100))
         fixture.container.mainContext.insert(item)
         let executor = AIToolExecutor(modelContext: fixture.container.mainContext)
-        let call = AIToolCall(id: "auto", type: "function", function: .init(name: "set_recurring_auto_completion",
-            arguments: #"{"id":"\#(item.id)","enabled":true}"#))
+        let call = AIToolCall(id: "auto", type: "function", function: .init(name: "update_todo",
+            arguments: #"{"id":"\#(item.id)","automatically_completes":true}"#))
         guard case let .proposal(proposal) = try executor.handle(call) else { return XCTFail() }
         XCTAssertFalse(proposal.requiresMandatoryConfirmation)
         XCTAssertFalse(item.automaticallyCompletes)

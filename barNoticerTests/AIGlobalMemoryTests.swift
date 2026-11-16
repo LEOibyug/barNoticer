@@ -83,8 +83,8 @@ final class AIGlobalMemoryTests: XCTestCase {
         XCTAssertTrue(proposal.requiresMandatoryConfirmation)
         XCTAssertThrowsError(try f.executor.apply(proposal))
         XCTAssertEqual(try f.memory.read().entries.count, 1)
-        // A model-supplied confirmation argument has no effect.
-        _ = try f.executor.handle(call("clear_global_memory", ["confirmed": true]))
+        // Model-supplied confirmation is rejected and cannot authorize clearing.
+        XCTAssertThrowsError(try f.executor.handle(call("clear_global_memory", ["confirmed": true])))
         XCTAssertEqual(try f.memory.read().entries.count, 1)
     }
 

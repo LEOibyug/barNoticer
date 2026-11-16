@@ -387,7 +387,7 @@ struct IslandSummaryView: View {
                 TodoGroupResolver.moveGroup(in: groups, moving: movingID, near: targetGroup.id)
             }
         }
-        try? modelContext.save()
+        ModelContextPersistence.save(modelContext, category: "Island", action: "保存分组排序")
         targetedGroupID = nil
         return true
     }
@@ -406,7 +406,7 @@ struct IslandSummaryView: View {
                 TodoGroupResolver.moveGroup(in: groups, moving: movingID, to: groups.count - 1)
             }
         }
-        try? modelContext.save()
+        ModelContextPersistence.save(modelContext, category: "Island", action: "保存分组排序")
         targetedGroupID = nil
         return true
     }
@@ -647,7 +647,7 @@ private struct IslandTodoLine: View {
                     } else {
                         item.updateCompletion(true)
                     }
-                    try? modelContext.save()
+                    ModelContextPersistence.save(modelContext, category: "Island", action: "完成事项")
                 } label: {
                     Image(systemName: "circle")
                         .font(.system(size: 15, weight: .medium))

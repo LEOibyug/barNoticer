@@ -2,17 +2,29 @@ import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
-struct AIImageAttachment: Identifiable, Equatable {
+nonisolated struct AIImageAttachment: Identifiable, Equatable, Sendable {
     static let maxCount = 4
     static let maxSourceBytes = 20 * 1_024 * 1_024
     static let maxPixelSize = 2_048
 
+    private final class PreviewBox: @unchecked Sendable {
+        let image: NSImage?
+        init(data: Data) {
+            self.image = NSImage(data: data)
+        }
+    }
+
     let id = UUID()
     let name: String
     let data: Data
+    let dataURL: String
+    private let previewBox: PreviewBox
 
-    var dataURL: String { "data:image/jpeg;base64," + data.base64EncodedString() }
-    var preview: NSImage? { NSImage(data: data) }
+    var preview: NSImage? { previewBox.image }
+
+    static func == (lhs: AIImageAttachment, rhs: AIImageAttachment) -> Bool {
+        lhs.id == rhs.id && lhs.name == rhs.name && lhs.data == rhs.data
+    }
 
     init(data: Data, name: String) throws {
         guard data.count <= Self.maxSourceBytes else { throw ImportError.tooLarge }
@@ -33,8 +45,11 @@ struct AIImageAttachment: Identifiable, Equatable {
         }
         CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
         guard CGImageDestinationFinalize(destination) else { throw ImportError.invalidImage }
-        self.data = output as Data
+        let encoded = output as Data
+        self.data = encoded
         self.name = name
+        self.dataURL = "data:image/jpeg;base64," + encoded.base64EncodedString()
+        self.previewBox = PreviewBox(data: encoded)
     }
 
     init(url: URL) throws {

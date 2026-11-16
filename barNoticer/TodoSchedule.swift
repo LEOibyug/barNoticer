@@ -22,7 +22,7 @@ enum TodoScheduleKind: String, CaseIterable, Codable, Equatable, Identifiable {
     }
 }
 
-enum TodoRecurrenceRule: Codable, Equatable, Hashable, Identifiable {
+nonisolated enum TodoRecurrenceRule: Codable, Equatable, Hashable, Identifiable {
     case daily
     case weekly
     case monthly

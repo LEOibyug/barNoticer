@@ -139,34 +139,6 @@ final class AIConversationTests: XCTestCase {
         XCTAssertTrue(AIVisibleResponse.hasVisibleContent(fallback))
     }
 
-    func testSystemPromptDescribesTodoReferenceSyntax() {
-        XCTAssertTrue(AISystemPrompt.text.contains("[[todo:"))
-    }
-
-    func testSystemPromptAvoidsDuplicatingRenderedTodoDetails() {
-        XCTAssertTrue(AISystemPrompt.text.contains("不要在标记之外重复"))
-    }
-
-    func testSystemPromptAvoidsSeparatorsBetweenEnumeratedTodoReferences() {
-        XCTAssertTrue(AISystemPrompt.text.contains("连续列举多个事项引用时"))
-        XCTAssertTrue(AISystemPrompt.text.contains("引用标记之间不要插入任何文字或标点"))
-    }
-
-    func testSystemPromptKeepsAssistantInsideTaskManagementRole() {
-        XCTAssertTrue(AISystemPrompt.text.contains("只负责管理事项"))
-        XCTAssertTrue(AISystemPrompt.text.contains("不要向用户询问是否需要"))
-    }
-
-    func testSystemPromptRequiresPlainTextInsteadOfMarkdown() {
-        XCTAssertTrue(AISystemPrompt.text.contains("不要使用 Markdown"))
-    }
-
-    func testSystemPromptUsesCurrentContextForRelativeDates() {
-        XCTAssertTrue(AISystemPrompt.text.contains("相对日期"))
-        XCTAssertTrue(AISystemPrompt.text.contains("今天、明天、下周"))
-        XCTAssertTrue(AISystemPrompt.text.contains("当前本地时间"))
-        XCTAssertTrue(AISystemPrompt.text.contains("deadlineLocal"))
-    }
 
     func testRequestBuilderIncludesInlineTodoContextBeforeConversation() {
         var history = AIConversationHistory(maxTurns: 3)

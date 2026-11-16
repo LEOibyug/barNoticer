@@ -3,6 +3,7 @@ import Foundation
 enum SidebarSelection: Hashable {
     case filter(TodoFilter)
     case group(UUID)
+    case summaries
     case islandSettings
     case aiSettings
     case reminderSettings

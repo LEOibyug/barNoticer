@@ -50,15 +50,17 @@ final class AIAssistantPanelController {
         self.panel = panel
         observeHeight(for: assistantModel, panel: panel)
         observeScreenChanges(panel: panel)
+        let screen = ScreenTargeting.currentPointerScreen()
         resize(panel, to: AIAssistantPanelChrome.size(
             outputKind: AIAssistantPanelChrome.outputKind(response: assistantModel.response, proposals: assistantModel.proposals, state: assistantModel.state),
             hasImages: !assistantModel.images.isEmpty,
-            hasImageError: assistantModel.imageInputError != nil
-        ), animated: false)
-        // 以当前交互屏幕为准定位；高度变化时保持底边锚定。
-        center(panel)
+            hasImageError: assistantModel.imageInputError != nil,
+            hasActivity: assistantModel.state == .loading || !assistantModel.activityLines.isEmpty
+        ), animated: false, on: screen)
+        center(panel, on: screen)
         panel.alphaValue = 0
         NSApp.activate(ignoringOtherApps: true)
+        NotchPopupPresence.setVisible(true, owner: self)
         panel.makeKeyAndOrderFront(nil)
         assistantModel.requestInputFocus()
         try? AppDebugLogStore.shared.write(
@@ -84,6 +86,7 @@ final class AIAssistantPanelController {
             Task { @MainActor [weak self, weak panel] in
                 guard let self, self.presentationGeneration == generation, !self.isPresented else { return }
                 panel?.orderOut(nil)
+                NotchPopupPresence.setVisible(false, owner: self)
             }
         }
     }
@@ -101,12 +104,15 @@ final class AIAssistantPanelController {
     }
 
     private func makePanel(model: AIAssistantModel) -> NSPanel {
-        let panel = AIAssistantPanelChrome.makePanel(contentView: NSHostingView(rootView: AIAssistantPanelView(
+        let contentView = NSHostingView(rootView: AIAssistantPanelView(
             model: model,
             close: { [weak self] in self?.close() },
             newConversation: { [weak self] in self?.startNewConversation() },
             escape: { [weak self] in self?.handleEscape() }
-        ))) { [weak self] in
+        ))
+        // 窗口尺寸由控制器管理，避免 SwiftUI 的瞬时布局反向收缩面板。
+        contentView.sizingOptions = []
+        let panel = AIAssistantPanelChrome.makePanel(contentView: contentView) { [weak self] in
             guard self?.model.isChoosingImages != true else { return }
             guard self?.model.memoryClearConfirmation == nil else { return }
             self?.close()
@@ -133,8 +139,8 @@ final class AIAssistantPanelController {
 
     private func observeHeight(for model: AIAssistantModel, panel: NSPanel) {
         heightCancellable = Publishers.CombineLatest3(model.$response, model.$proposals, model.$state)
-            .combineLatest(model.$images, model.$imageInputError)
-            .map { output, images, imageError in
+            .combineLatest(model.$images, model.$imageInputError, model.$activityLines)
+            .map { output, images, imageError, activityLines in
                 let (response, proposals, state) = output
                 return AIAssistantPanelChrome.size(
                     outputKind: AIAssistantPanelChrome.outputKind(
@@ -143,7 +149,8 @@ final class AIAssistantPanelController {
                         state: state
                     ),
                     hasImages: !images.isEmpty,
-                    hasImageError: imageError != nil
+                    hasImageError: imageError != nil,
+                    hasActivity: state == .loading || !activityLines.isEmpty
                 )
             }
             .removeDuplicates()
@@ -153,10 +160,9 @@ final class AIAssistantPanelController {
             }
     }
 
-    private func resize(_ panel: NSPanel, to size: CGSize, animated: Bool) {
-        // 尺寸限制在目标屏幕内，保留最小可用尺寸，不产生负数宽高。
-        let screenFrame = (panel.screen ?? NSScreen.main)?.visibleFrame
-            ?? CGRect(x: 0, y: 0, width: 1_280, height: 800)
+    private func resize(_ panel: NSPanel, to size: CGSize, animated: Bool, on screen: NSScreen? = nil) {
+        // 同时避开菜单栏、刘海安全区和 Dock。
+        let screenFrame = usableFrame(on: screen ?? panel.screen ?? NSScreen.main)
         let margin: CGFloat = 12
         let clamped = CGSize(
             width: min(max(size.width, 360), screenFrame.width - margin * 2),
@@ -171,28 +177,39 @@ final class AIAssistantPanelController {
             height: clamped.height
         )
         let constrained = constrain(next, to: screenFrame)
-        guard panel.frame != constrained else { return }
         if animated, panel.isVisible {
+            // 当前帧相同也可能有旧目标动画，仍需提交最新目标以覆盖它。
             NSAnimationContext.runAnimation(duration: 0.22, timing: CAMediaTimingFunction(name: .easeInEaseOut)) {
                 panel.animator().setFrame(constrained, display: true)
             }
-        } else {
+        } else if panel.frame != constrained {
             panel.setFrame(constrained, display: true)
         }
     }
 
-    private func center(_ panel: NSPanel) {
-        // 使用当前交互屏幕；整个 frame 的四边限制在 visibleFrame 内，四周至少 12 pt。
-        let screen = panel.screen ?? NSScreen.main
-        let screenFrame = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1_280, height: 800)
+    private func center(_ panel: NSPanel, on screen: NSScreen?) {
+        let screenFrame = usableFrame(on: screen)
         let size = panel.frame.size
         let ideal = CGRect(
             x: screenFrame.midX - size.width / 2,
-            y: screenFrame.midY + screenFrame.height * 0.12 - size.height / 2,
+            y: (screen?.safeAreaInsets.top ?? 0) > 0
+                ? screenFrame.maxY - 12 - size.height
+                : screenFrame.midY + screenFrame.height * 0.12 - size.height / 2,
             width: size.width,
             height: size.height
         )
         panel.setFrame(constrain(ideal, to: screenFrame), display: false)
+    }
+
+    private func usableFrame(on screen: NSScreen?) -> CGRect {
+        guard let screen else { return CGRect(x: 0, y: 0, width: 1_280, height: 800) }
+        let safeFrame = CGRect(
+            x: screen.frame.minX + screen.safeAreaInsets.left,
+            y: screen.frame.minY + screen.safeAreaInsets.bottom,
+            width: screen.frame.width - screen.safeAreaInsets.left - screen.safeAreaInsets.right,
+            height: screen.frame.height - screen.safeAreaInsets.top - screen.safeAreaInsets.bottom
+        )
+        return screen.visibleFrame.intersection(safeFrame)
     }
 
     private func constrain(_ frame: CGRect, to visibleFrame: CGRect) -> CGRect {
@@ -214,7 +231,7 @@ enum AIAssistantPanelChrome {
     static let responseSize = CGSize(width: 720, height: 320)
     static let expandedSize = CGSize(width: 720, height: 520)
     static let size = compactSize
-    static let cornerRadius: CGFloat = 22
+    static let cornerRadius: CGFloat = 24
 
     static func size(hasVisibleConversation: Bool, hasTransientOutput: Bool) -> CGSize {
         hasTransientOutput ? responseSize : compactSize
@@ -235,9 +252,13 @@ enum AIAssistantPanelChrome {
         }
     }
 
-    static func size(outputKind: OutputKind, hasImages: Bool, hasImageError: Bool) -> CGSize {
+    static func size(outputKind: OutputKind, hasImages: Bool, hasImageError: Bool, hasActivity: Bool = false) -> CGSize {
         let base = size(outputKind: outputKind)
-        return CGSize(width: base.width, height: base.height + (hasImages ? 76 : 0) + (hasImageError ? 28 : 0))
+        return CGSize(
+            width: base.width,
+            height: base.height + (hasImages ? 76 : 0) + (hasImageError ? 28 : 0)
+                + (hasActivity ? AIAssistantPanelStyle.activityHeight + 12 : 0)
+        )
     }
 
     static func outputKind(response: String, proposals: [AIActionProposal], state: AIAssistantModel.State) -> OutputKind {
