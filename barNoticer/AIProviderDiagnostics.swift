@@ -53,8 +53,124 @@ struct AIProviderDiagnostics {
     }
 
     static func candidates(in models: [String], prefix: String) -> [String] {
-        let prefix = prefix.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return Array(models.filter { $0.lowercased().hasPrefix(prefix) && $0 != prefix }.prefix(8))
+        candidates(in: models, query: prefix)
+    }
+
+    static func candidates(in models: [String], query: String, limit: Int = 12) -> [String] {
+        guard limit > 0 else { return [] }
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else {
+            return Array(models.prefix(limit))
+        }
+
+        let separators = Set<Character>(["-", "/", "_", ".", ":"])
+        let tokens = trimmed.split(whereSeparator: \.isWhitespace).map(String.init)
+        let compactChars = Array(trimmed.filter { !$0.isWhitespace })
+
+        struct ScoredCandidate {
+            let model: String
+            let tier: Int
+            let primary: Int
+            let secondary: Int
+        }
+
+        func isSegmentBoundary(in text: String, at index: String.Index) -> Bool {
+            guard index > text.startIndex else { return false }
+            let prev = text[text.index(before: index)]
+            return separators.contains(prev) || prev.isWhitespace
+        }
+
+        func earliestBoundaryOffset(in text: String, substring: String) -> Int? {
+            var searchStart = text.startIndex
+            while let range = text.range(of: substring, range: searchStart..<text.endIndex) {
+                if isSegmentBoundary(in: text, at: range.lowerBound) {
+                    return text.distance(from: text.startIndex, to: range.lowerBound)
+                }
+                searchStart = text.index(after: range.lowerBound)
+            }
+            return nil
+        }
+
+        func subsequenceSpan(in text: String, chars: [Character]) -> (span: Int, start: Int)? {
+            guard !chars.isEmpty else { return nil }
+            var charIndex = 0
+            var firstPos: Int?
+            var lastPos = 0
+            for (offset, ch) in text.enumerated() where ch == chars[charIndex] {
+                if firstPos == nil { firstPos = offset }
+                lastPos = offset
+                charIndex += 1
+                if charIndex == chars.count {
+                    return (lastPos - (firstPos ?? 0), firstPos ?? 0)
+                }
+            }
+            return nil
+        }
+
+        func score(_ model: String) -> ScoredCandidate? {
+            let lower = model.lowercased()
+            if lower == trimmed { return nil }
+
+            // Tier 0: Prefix match
+            if lower.hasPrefix(trimmed) {
+                return ScoredCandidate(model: model, tier: 0, primary: 0, secondary: lower.count)
+            }
+
+            // Tier 1: Segment-boundary match (after -, /, _, ., :, or whitespace)
+            if let offset = earliestBoundaryOffset(in: lower, substring: trimmed) {
+                return ScoredCandidate(model: model, tier: 1, primary: offset, secondary: lower.count)
+            }
+
+            // Tier 2: General substring match
+            if let range = lower.range(of: trimmed) {
+                let offset = lower.distance(from: lower.startIndex, to: range.lowerBound)
+                return ScoredCandidate(model: model, tier: 2, primary: offset, secondary: lower.count)
+            }
+
+            // Tier 3: Multi-token match (all whitespace-separated tokens appear)
+            if tokens.count > 1 {
+                var tokenOffsets: [Int] = []
+                tokenOffsets.reserveCapacity(tokens.count)
+                var searchFrom = lower.startIndex
+                var inOrder = true
+                var allFound = true
+                for token in tokens {
+                    if let orderedRange = lower.range(of: token, range: searchFrom..<lower.endIndex) {
+                        tokenOffsets.append(lower.distance(from: lower.startIndex, to: orderedRange.lowerBound))
+                        searchFrom = orderedRange.upperBound
+                    } else if let anyRange = lower.range(of: token) {
+                        inOrder = false
+                        tokenOffsets.append(lower.distance(from: lower.startIndex, to: anyRange.lowerBound))
+                    } else {
+                        allFound = false
+                        break
+                    }
+                }
+                if allFound, let firstOffset = tokenOffsets.min() {
+                    return ScoredCandidate(
+                        model: model,
+                        tier: 3,
+                        primary: inOrder ? 0 : 1,
+                        secondary: firstOffset
+                    )
+                }
+            }
+
+            // Tier 4: Ordered subsequence (fuzzy) match
+            if let match = subsequenceSpan(in: lower, chars: compactChars) {
+                return ScoredCandidate(model: model, tier: 4, primary: match.span, secondary: match.start)
+            }
+
+            return nil
+        }
+
+        let ranked = models.compactMap(score).sorted { lhs, rhs in
+            if lhs.tier != rhs.tier { return lhs.tier < rhs.tier }
+            if lhs.primary != rhs.primary { return lhs.primary < rhs.primary }
+            if lhs.secondary != rhs.secondary { return lhs.secondary < rhs.secondary }
+            return lhs.model.localizedStandardCompare(rhs.model) == .orderedAscending
+        }
+        return Array(ranked.prefix(limit).map(\.model))
     }
 
     func balance(for provider: AIProviderConfiguration) async -> String? {

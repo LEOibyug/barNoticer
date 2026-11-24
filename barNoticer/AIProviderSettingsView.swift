@@ -31,53 +31,95 @@ struct AIProviderSettingsView: View {
             refresh: refreshID
         )
     }
-    private var candidates: [String] { AIProviderDiagnostics.candidates(in: models, prefix: draft.model) }
+    private var candidates: [String] { AIProviderDiagnostics.candidates(in: models, query: draft.model) }
 
     var body: some View {
-        SettingsSection(title: "模型配置", footer: "配置自动保存。按顺序模式从第一套开始，仅在请求失败时尝试下一套；测试连接只检查当前编辑配置。") {
+        overviewSection
+        editorSection
+    }
+
+    private var overviewSection: some View {
+        SettingsSection(
+            title: "供应商",
+            footer: "仅使用指定配置时只有当前使用项会参与请求；按列表顺序尝试时，将从第 1 顺位开始并在失败后依次回退。点击列表项即可编辑，不会改变当前使用配置。"
+        ) {
             field("使用方式") {
                 Picker("使用方式", selection: Binding(get: { draft.collection.mode }, set: { draft.setMode($0) })) {
                     ForEach(AIProviderMode.allCases) { Text($0.title).tag($0) }
-                }.labelsHidden()
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
             }
-            if draft.collection.mode == .single {
-                field("使用配置") {
-                    Picker("使用配置", selection: Binding(get: { draft.collection.activeID }, set: { draft.setActive($0) })) {
-                        ForEach(draft.collection.providers) { Text(displayName($0)).tag($0.id) }
-                    }.labelsHidden()
+
+            VStack(spacing: 6) {
+                ForEach(Array(draft.collection.providers.enumerated()), id: \.element.id) { index, item in
+                    providerRow(item, index: index)
                 }
             }
-            field("编辑配置") {
-                HStack {
-                    Picker("编辑配置", selection: $draft.editingID) {
-                        ForEach(Array(draft.collection.providers.enumerated()), id: \.element.id) { index, provider in
-                            Text("\(index + 1). \(displayName(provider))").tag(provider.id)
-                        }
-                    }.labelsHidden()
-                    Menu {
-                        Button("新增自定义供应商") { draft.addProvider() }
-                        Button("新增 Google AI Studio (Gemini)") { draft.addGoogleAIStudioProvider() }
-                    } label: {
-                        Image(systemName: "plus")
+
+            HStack {
+                Menu {
+                    Button("自定义供应商") {
+                        modelFocused = false
+                        draft.addProvider()
                     }
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .help("新增供应商")
-                    Button { draft.removeProvider() } label: { Image(systemName: "minus") }
-                        .disabled(draft.collection.providers.count < 2).help("删除当前配置")
+                    Button("Google AI Studio (Gemini)") {
+                        modelFocused = false
+                        draft.addGoogleAIStudioProvider()
+                    }
+                } label: {
+                    Label("新增供应商", systemImage: "plus")
                 }
+                .fixedSize()
+
+                Spacer()
+
+                Text("共 \(draft.collection.providers.count) 套配置")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            if draft.collection.mode == .ordered {
-                field("尝试顺序") {
-                    HStack {
-                        Text("第 \((draft.collection.providers.firstIndex { $0.id == draft.editingID } ?? 0) + 1) 顺位")
+        }
+    }
+
+    private var editorSection: some View {
+        SettingsSection(
+            title: "编辑配置 · \(displayName(draft.provider))",
+            footer: "配置修改自动保存；测试连接仅检查当前正在编辑的这套配置。"
+        ) {
+            HStack(spacing: 10) {
+                if draft.collection.mode == .single {
+                    if draft.provider.id == draft.collection.activeID {
+                        Label("当前正在使用此配置", systemImage: "checkmark.circle.fill")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.tint)
+                    } else {
+                        Text("当前为备用配置")
+                            .font(.caption)
                             .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("上移") { draft.moveProvider(by: -1) }.disabled(draft.collection.providers.first?.id == draft.editingID)
-                        Button("下移") { draft.moveProvider(by: 1) }.disabled(draft.collection.providers.last?.id == draft.editingID)
+                        Button("设为当前使用") {
+                            draft.setActive(draft.provider.id)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
+                } else {
+                    let rank = (draft.collection.providers.firstIndex { $0.id == draft.provider.id } ?? 0) + 1
+                    Text("当前位于第 \(rank) 顺位（按列表顺序尝试）")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+
+                Spacer()
+
+                Button("删除配置", role: .destructive) {
+                    modelFocused = false
+                    draft.removeProvider(id: draft.provider.id)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(draft.collection.providers.count < 2)
             }
+
             field("供应商名") {
                 TextField("供应商名", text: providerBinding(\.name), prompt: Text("例如：我的供应商").foregroundStyle(.tertiary))
                     .labelsHidden().textFieldStyle(.roundedBorder)
@@ -129,14 +171,29 @@ struct AIProviderSettingsView: View {
                     TextField("模型", text: $draft.model, prompt: Text("例如：\(draft.provider.responseFormat.defaultModel)").foregroundStyle(.tertiary))
                         .labelsHidden().textFieldStyle(.roundedBorder).focused($modelFocused)
                     if modelFocused, !candidates.isEmpty {
-                        VStack(alignment: .leading, spacing: 0) {
+                        let list = VStack(alignment: .leading, spacing: 0) {
                             ForEach(candidates, id: \.self) { candidate in
                                 Button {
                                     draft.model = candidate
                                     modelFocused = false
                                 } label: {
-                                    Text(candidate).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5).padding(.horizontal, 8)
-                                }.buttonStyle(.plain).focusable(false)
+                                    Text(candidate)
+                                        .lineLimit(1)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.vertical, 5)
+                                        .padding(.horizontal, 8)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .focusable(false)
+                            }
+                        }
+                        Group {
+                            if candidates.count > 6 {
+                                ScrollView { list }
+                                    .frame(maxHeight: 200)
+                            } else {
+                                list
                             }
                         }
                         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
@@ -167,6 +224,17 @@ struct AIProviderSettingsView: View {
                     Text(discoveryStatus.isEmpty ? "填写 URL 和 Key 后自动获取，也可手动输入模型名" : discoveryStatus)
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer()
+                    if !models.isEmpty {
+                        Menu("选择") {
+                            ForEach(models, id: \.self) { model in
+                                Button(model) {
+                                    draft.model = model
+                                    modelFocused = false
+                                }
+                            }
+                        }
+                        .fixedSize()
+                    }
                     Button("刷新") { refreshID += 1 }.disabled(!draft.canDiscover)
                 }
             }
@@ -187,12 +255,121 @@ struct AIProviderSettingsView: View {
             }
         }
         .task(id: discoveryID) { if automaticallyDiscover { await discover() } }
+        .onChange(of: draft.editingID) { _, _ in
+            modelFocused = false
+        }
         .onChange(of: draft.provider) { _, _ in
             probeTask?.cancel()
             isTesting = false
             probe = AIProviderProbeResult()
         }
         .onDisappear { probeTask?.cancel() }
+    }
+
+    private func providerRow(_ item: AIProviderConfiguration, index: Int) -> some View {
+        let isEditing = item.id == draft.editingID
+        let isActive = item.id == draft.collection.activeID
+        let isReady = item.isReady(environment: draft.environment)
+        let modelText = item.model.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return HStack(spacing: 10) {
+            if draft.collection.mode == .single {
+                Button {
+                    draft.setActive(item.id)
+                } label: {
+                    Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                        .font(.body)
+                }
+                .buttonStyle(.borderless)
+                .help(isActive ? "当前使用配置" : "设为当前使用")
+            } else {
+                Text("\(index + 1)")
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(Color.secondary.opacity(0.14)))
+            }
+
+            Button {
+                modelFocused = false
+                draft.editingID = item.id
+            } label: {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(displayName(item))
+                            .font(.body.weight(.medium))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        if draft.collection.mode == .single, isActive {
+                            statusTag("当前使用", tint: .accentColor)
+                        }
+                        if isEditing {
+                            statusTag("编辑中", tint: .secondary)
+                        }
+                    }
+                    HStack(spacing: 4) {
+                        Text("\(item.responseFormat.title) · \(modelText.isEmpty ? "未设置模型" : modelText)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        if !isReady {
+                            Text("· 待完善配置")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if draft.collection.mode == .single {
+                if !isActive {
+                    Button("使用") {
+                        draft.setActive(item.id)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            } else {
+                HStack(spacing: 4) {
+                    Button { draft.moveProvider(id: item.id, by: -1) } label: {
+                        Image(systemName: "arrow.up")
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(index == 0)
+                    .help("上移")
+
+                    Button { draft.moveProvider(id: item.id, by: 1) } label: {
+                        Image(systemName: "arrow.down")
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(index == draft.collection.providers.count - 1)
+                    .help("下移")
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isEditing ? Color.accentColor.opacity(0.10) : Color.secondary.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(isEditing ? Color.accentColor.opacity(0.45) : Color.clear, lineWidth: 1)
+        )
+    }
+
+    private func statusTag(_ text: String, tint: Color) -> some View {
+        Text(text)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(tint.opacity(0.14)))
     }
 
     private func displayName(_ provider: AIProviderConfiguration) -> String { provider.name.isEmpty ? "未命名供应商" : provider.name }
@@ -222,7 +399,7 @@ struct AIProviderSettingsView: View {
             let fetched = try await diagnostics.models(for: provider)
             guard !Task.isCancelled, identity == discoveryID else { return }
             models = fetched
-            discoveryStatus = fetched.isEmpty ? "未返回模型，可手动输入" : "已获取 \(fetched.count) 个模型，输入前缀可补全"
+            discoveryStatus = fetched.isEmpty ? "未返回模型，可手动输入" : "已获取 \(fetched.count) 个模型，输入关键词可筛选补全"
         } catch {
             guard !Task.isCancelled, identity == discoveryID else { return }
             discoveryStatus = "暂时无法获取模型，可手动输入"

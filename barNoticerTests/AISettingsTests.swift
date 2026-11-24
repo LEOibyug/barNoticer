@@ -296,4 +296,42 @@ final class AISettingsTests: XCTestCase {
         let loaded = AIProviderCollection.load(from: defaults)
         XCTAssertEqual(loaded.providers.first?.apiKeySource, .manual)
     }
+
+    func testMoveAndRemoveProviderByIDKeepEditingAndSelectNeighborFallback() {
+        let suiteName = "ProviderListOpsTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = AIAPIKeyStore(defaults: defaults)
+
+        var draft = AISettingsDraft(defaults: defaults, keyStore: store)
+        let firstID = draft.provider.id
+        draft.provider.name = "A"
+
+        draft.addProvider()
+        let secondID = draft.provider.id
+        draft.provider.name = "B"
+
+        draft.addProvider()
+        let thirdID = draft.provider.id
+        draft.provider.name = "C"
+
+        // 编辑 C 时移动 A 与 B，不应改变当前 editingID
+        draft.moveProvider(id: firstID, by: 1)
+        XCTAssertEqual(draft.collection.providers.map(\.id), [secondID, firstID, thirdID])
+        XCTAssertEqual(draft.editingID, thirdID)
+
+        // 删除非当前激活也非当前编辑的 B，应保持 activeID 与 editingID 不变
+        draft.setActive(firstID)
+        draft.removeProvider(id: secondID)
+        XCTAssertEqual(draft.collection.providers.map(\.id), [firstID, thirdID])
+        XCTAssertEqual(draft.collection.activeID, firstID)
+        XCTAssertEqual(draft.editingID, thirdID)
+
+        // 删除当前编辑与激活的配置时，切换到相邻保留项
+        draft.setActive(thirdID)
+        draft.removeProvider(id: thirdID)
+        XCTAssertEqual(draft.collection.providers.map(\.id), [firstID])
+        XCTAssertEqual(draft.collection.activeID, firstID)
+        XCTAssertEqual(draft.editingID, firstID)
+    }
 }

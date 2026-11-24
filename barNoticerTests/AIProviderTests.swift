@@ -426,6 +426,59 @@ final class AIProviderTests: XCTestCase {
         XCTAssertNil(unavailable)
     }
 
+    func testModelCandidatesSupportSubstringSegmentTokenAndFuzzyRanking() {
+        let models = [
+            "claude-sonnet-4",
+            "flash-preview",
+            "g-1-2-3-4-5-f",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gpt-4o",
+            "gpt-4o-mini",
+            "myflash-model",
+            "openai/gpt-4o"
+        ]
+
+        // 片段与边界匹配，且优先级为 前缀 > 边界词 > 普通子串
+        XCTAssertEqual(
+            AIProviderDiagnostics.candidates(in: models, query: "flash"),
+            ["flash-preview", "gemini-2.5-flash", "myflash-model"]
+        )
+        XCTAssertEqual(
+            AIProviderDiagnostics.candidates(in: models, query: "mini"),
+            ["gpt-4o-mini", "gemini-2.5-pro", "gemini-2.5-flash"]
+        )
+        XCTAssertEqual(
+            AIProviderDiagnostics.candidates(in: models, query: "gpt"),
+            ["gpt-4o", "gpt-4o-mini", "openai/gpt-4o"]
+        )
+
+        // 多词匹配（顺序和乱序均可命中）
+        XCTAssertEqual(
+            AIProviderDiagnostics.candidates(in: models, query: "2.5 flash"),
+            ["gemini-2.5-flash"]
+        )
+        XCTAssertEqual(
+            AIProviderDiagnostics.candidates(in: models, query: "flash 2.5"),
+            ["gemini-2.5-flash"]
+        )
+
+        // 模糊子序列匹配，且跨度更紧凑者排前面
+        XCTAssertEqual(
+            AIProviderDiagnostics.candidates(in: models, query: "g25f"),
+            ["gemini-2.5-flash", "g-1-2-3-4-5-f"]
+        )
+
+        // 空输入返回初始候选；完全相等（忽略大小写）被排除
+        XCTAssertEqual(
+            AIProviderDiagnostics.candidates(in: models, query: "   ", limit: 3),
+            ["claude-sonnet-4", "flash-preview", "g-1-2-3-4-5-f"]
+        )
+        XCTAssertFalse(
+            AIProviderDiagnostics.candidates(in: models, query: "GPT-4O").contains("gpt-4o")
+        )
+    }
+
     func testProbeTestsOnlyCurrentConfigAndActuallyValidatesImageContents() async throws {
         let diagnostics = AIProviderDiagnostics(session: client().session)
         ProviderURLProtocol.handler = { request in

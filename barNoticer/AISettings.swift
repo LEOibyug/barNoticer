@@ -164,14 +164,27 @@ struct AISettingsDraft {
         provider = updated
     }
     mutating func removeProvider() {
-        guard collection.providers.count > 1 else { return }
-        collection.providers.removeAll { $0.id == editingID }
-        if collection.activeID == editingID { collection.activeID = collection.providers[0].id }
-        editingID = collection.providers[0].id
+        removeProvider(id: editingID)
+    }
+    mutating func removeProvider(id: UUID) {
+        guard collection.providers.count > 1,
+              let removedIndex = collection.providers.firstIndex(where: { $0.id == id }) else { return }
+        collection.providers.remove(at: removedIndex)
+        let fallbackIndex = min(removedIndex, collection.providers.count - 1)
+        let fallbackID = collection.providers[fallbackIndex].id
+        if collection.activeID == id {
+            collection.activeID = fallbackID
+        }
+        if editingID == id {
+            editingID = fallbackID
+        }
         saveIfLoaded()
     }
     mutating func moveProvider(by offset: Int) {
-        guard let index = collection.providers.firstIndex(where: { $0.id == editingID }),
+        moveProvider(id: editingID, by: offset)
+    }
+    mutating func moveProvider(id: UUID, by offset: Int) {
+        guard let index = collection.providers.firstIndex(where: { $0.id == id }),
               collection.providers.indices.contains(index + offset) else { return }
         collection.providers.swapAt(index, index + offset)
         saveIfLoaded()
