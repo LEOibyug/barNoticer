@@ -13,6 +13,7 @@ struct AISettings: Equatable {
 
     var responseFormat: AIResponseFormat = .chatCompletions
     var reasoningEffort: AIReasoningEffort?
+    var apiKeySource: AIAPIKeySource = .manual
     var providerRoutes: [AIProviderConfiguration]?
     var baseURL: URL
     var model: String
@@ -25,10 +26,12 @@ struct AISettings: Equatable {
         shortcut: AIKeyboardShortcut = .default,
         requiresActionConfirmation: Bool = true,
         responseFormat: AIResponseFormat = .chatCompletions,
-        reasoningEffort: AIReasoningEffort? = nil
+        reasoningEffort: AIReasoningEffort? = nil,
+        apiKeySource: AIAPIKeySource = .manual
     ) {
         self.responseFormat = responseFormat
         self.reasoningEffort = reasoningEffort
+        self.apiKeySource = apiKeySource
         self.baseURL = baseURL
         self.model = model
         self.shortcut = shortcut
@@ -54,6 +57,7 @@ struct AISettings: Equatable {
                 model = active.settings.model
                 responseFormat = active.responseFormat
                 reasoningEffort = active.reasoningEffort
+                apiKeySource = active.effectiveAPIKeySource
             }
         }
     }
@@ -84,15 +88,21 @@ struct AISettings: Equatable {
 struct AISettingsDraft {
     private let defaults: UserDefaults
     private let keyStore: AIAPIKeyStore
+    let environment: [String: String]
     private var isLoading = false
     var collection: AIProviderCollection
     var editingID: UUID
     var shortcut: AIKeyboardShortcut { didSet { saveIfLoaded() } }
     var requiresActionConfirmation: Bool { didSet { saveIfLoaded() } }
 
-    init(defaults: UserDefaults = .standard, keyStore: AIAPIKeyStore = .shared) {
+    init(
+        defaults: UserDefaults = .standard,
+        keyStore: AIAPIKeyStore = .shared,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) {
         self.defaults = defaults
         self.keyStore = keyStore
+        self.environment = environment
         let settings = AISettings(defaults: defaults)
         collection = AIProviderCollection.load(from: defaults, keyStore: keyStore)
         editingID = collection.activeID
@@ -111,14 +121,47 @@ struct AISettingsDraft {
     var baseURLText: String { get { provider.baseURL } set { provider.baseURL = newValue } }
     var model: String { get { provider.model } set { provider.model = newValue } }
     var apiKey: String { get { provider.apiKey } set { provider.apiKey = newValue } }
+    var resolvedAPIKey: String { provider.resolvedAPIKey(environment: environment) }
+    var hasEnvironmentGeminiAPIKey: Bool { AIEnvironmentAPIKey.hasGeminiAPIKey(in: environment) }
+    var canDiscover: Bool { provider.canDiscover(environment: environment) }
     var settings: AISettings { provider.settings }
-    var canTestConnection: Bool { provider.isReady }
+    var canTestConnection: Bool { provider.isReady(environment: environment) }
 
     mutating func addProvider() {
         let new = AIProviderConfiguration(name: "供应商 \(collection.providers.count + 1)")
         collection.providers.append(new)
         editingID = new.id
         saveIfLoaded()
+    }
+    mutating func addGoogleAIStudioProvider() {
+        let new = AIProviderConfiguration(
+            name: "Google AI Studio",
+            baseURL: AIResponseFormat.gemini.defaultBaseURL,
+            responseFormat: .gemini,
+            apiKeySource: hasEnvironmentGeminiAPIKey ? .environment : .manual,
+            model: AIResponseFormat.gemini.defaultModel
+        )
+        collection.providers.append(new)
+        editingID = new.id
+        saveIfLoaded()
+    }
+    mutating func setResponseFormat(_ format: AIResponseFormat) {
+        var updated = provider
+        let previousFormat = updated.responseFormat
+        updated.responseFormat = format
+        if format == .gemini {
+            if updated.baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                updated.baseURL = format.defaultBaseURL
+            }
+            if previousFormat != .gemini,
+               updated.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               hasEnvironmentGeminiAPIKey {
+                updated.apiKeySource = .environment
+            }
+        } else {
+            updated.apiKeySource = .manual
+        }
+        provider = updated
     }
     mutating func removeProvider() {
         guard collection.providers.count > 1 else { return }

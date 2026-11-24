@@ -38,6 +38,9 @@ struct AIProviderStreamDecoder {
     private var anthropicStarted = false
     private var anthropicStopReason: String?
     private var anthropicBlocks: [Int: AnthropicBlock] = [:]
+    private var geminiParts: [[String: Any]] = []
+    private var geminiToolCalls: [AIToolCall] = []
+    private var hasGeminiReasoning = false
 
     init(format: AIResponseFormat, apiKey: String = "") {
         self.format = format
@@ -67,6 +70,7 @@ struct AIProviderStreamDecoder {
             case .chatCompletions: return try consumeChat(root)
             case .responses: return try consumeResponse(root, event: event)
             case .anthropic: return try consumeAnthropic(root, event: event)
+            case .gemini: return try consumeGemini(root)
             }
         } catch {
             failure = error
@@ -107,6 +111,14 @@ struct AIProviderStreamDecoder {
             if anthropicStopReason == "tool_use", calls.isEmpty { throw AIClientError.invalidResponse }
             return AIChatResult(content: texts.joined(separator: "\n"),
                 reasoningContent: reasoning.isEmpty ? nil : reasoning, toolCalls: calls)
+        case .gemini:
+            let items = try JSONDecoder().decode([JSONValue].self, from: JSONSerialization.data(withJSONObject: geminiParts))
+            return AIChatResult(
+                content: text,
+                reasoningContent: reasoning.isEmpty ? nil : reasoning,
+                toolCalls: geminiToolCalls,
+                responseItems: items
+            )
         }
     }
 
@@ -370,6 +382,76 @@ struct AIProviderStreamDecoder {
             return []
         default: throw AIClientError.invalidResponse
         }
+    }
+
+    private mutating func consumeGemini(_ root: [String: Any]) throws -> [AIStreamEvent] {
+        guard let candidates = root["candidates"] as? [[String: Any]] else {
+            if let blockReason = (root["promptFeedback"] as? [String: Any])?["blockReason"] as? String,
+               !blockReason.isEmpty {
+                throw incomplete("请求被安全策略拦截（\(blockReason)）")
+            }
+            throw AIClientError.invalidResponse
+        }
+        if candidates.isEmpty {
+            if let blockReason = (root["promptFeedback"] as? [String: Any])?["blockReason"] as? String,
+               !blockReason.isEmpty {
+                throw incomplete("请求被安全策略拦截（\(blockReason)）")
+            }
+            guard root["usageMetadata"] is [String: Any] else { throw AIClientError.invalidResponse }
+            return []
+        }
+        let candidate = candidates[0]
+        var events: [AIStreamEvent] = []
+        if let content = candidate["content"] as? [String: Any] {
+            guard let parts = content["parts"] as? [[String: Any]] else { throw AIClientError.invalidResponse }
+            for part in parts {
+                geminiParts.append(part)
+                if part["thought"] as? Bool == true {
+                    hasGeminiReasoning = true
+                    if let value = try optionalString(part, key: "text"), !value.isEmpty {
+                        reasoning += value
+                        events.append(.reasoning(value))
+                    }
+                } else if let value = try optionalString(part, key: "text") {
+                    text += value
+                    if !value.isEmpty { events.append(.text(value)) }
+                }
+                if let rawCall = part["functionCall"], !(rawCall is NSNull) {
+                    guard let fnCall = rawCall as? [String: Any],
+                          let name = try optionalString(fnCall, key: "name"), !name.isEmpty else {
+                        throw AIClientError.invalidResponse
+                    }
+                    let args: String
+                    if fnCall["args"] == nil || fnCall["args"] is NSNull {
+                        args = "{}"
+                    } else if let string = fnCall["args"] as? String {
+                        args = string
+                    } else if let dict = fnCall["args"] as? [String: Any] {
+                        args = String(decoding: try JSONSerialization.data(withJSONObject: dict), as: UTF8.self)
+                    } else {
+                        throw AIClientError.invalidResponse
+                    }
+                    let explicitID = (try optionalString(fnCall, key: "id")).flatMap { $0.isEmpty ? nil : $0 }
+                    let callID = explicitID ?? "gemini-call-\(geminiToolCalls.count)"
+                    geminiToolCalls.append(.init(id: callID, type: "function", function: .init(name: name, arguments: args)))
+                    events.append(.toolCall(name))
+                }
+            }
+        }
+        if let reason = try optionalString(candidate, key: "finishReason"),
+           !reason.isEmpty,
+           reason != "FINISH_REASON_UNSPECIFIED" {
+            guard reason == "STOP" else {
+                throw incomplete(reason == "MAX_TOKENS"
+                    ? "达到输出长度限制，请提高输出上限或缩短请求后重试"
+                    : "输出被供应商中止（\(reason)），请调整请求后重试")
+            }
+            guard !text.isEmpty || !reasoning.isEmpty || !geminiToolCalls.isEmpty || hasGeminiReasoning else {
+                throw AIClientError.invalidResponse
+            }
+            completed = true
+        }
+        return events
     }
 
     private func eventType(_ root: [String: Any], event: String?) throws -> String {

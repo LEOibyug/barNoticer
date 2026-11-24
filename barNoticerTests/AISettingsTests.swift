@@ -210,4 +210,90 @@ final class AISettingsTests: XCTestCase {
 
         XCTAssertEqual(messages.first?["reasoning_content"] as? String, "internal reasoning token")
     }
+
+    func testGoogleAIStudioPresetAndResponseFormatEnvironmentKeyBehavior() throws {
+        let suiteName = "GeminiSettingsEnvTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let credentialDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GeminiSettingsEnvTests-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: credentialDir)
+        }
+        let store = AIAPIKeyStore(defaults: defaults, directoryURL: credentialDir)
+
+        // 有环境变量时新增 Google AI Studio 默认使用环境变量，且不将环境变量写入本机凭据存储
+        var envDraft = AISettingsDraft(
+            defaults: defaults,
+            keyStore: store,
+            environment: [AIEnvironmentAPIKey.geminiVariableName: "  AIza-env-secret  "]
+        )
+        envDraft.addGoogleAIStudioProvider()
+        XCTAssertEqual(envDraft.provider.name, "Google AI Studio")
+        XCTAssertEqual(envDraft.provider.responseFormat, .gemini)
+        XCTAssertEqual(envDraft.provider.baseURL, AIResponseFormat.gemini.defaultBaseURL)
+        XCTAssertEqual(envDraft.provider.model, AIResponseFormat.gemini.defaultModel)
+        XCTAssertEqual(envDraft.provider.apiKeySource, .environment)
+        XCTAssertEqual(envDraft.resolvedAPIKey, "AIza-env-secret")
+        XCTAssertTrue(envDraft.canDiscover)
+        XCTAssertTrue(envDraft.canTestConnection)
+        XCTAssertEqual(store.readAPIKey(for: envDraft.provider.id), "")
+        XCTAssertEqual(store.readAPIKey(), "")
+        let rawDefaults = String(decoding: try XCTUnwrap(defaults.data(forKey: AIProviderCollection.storageKey)), as: UTF8.self)
+        XCTAssertFalse(rawDefaults.contains("AIza-env-secret"))
+
+        // 切换为手动输入并填写 Key 后，立即生效且可正常持久化手动 Key
+        envDraft.provider.apiKeySource = .manual
+        XCTAssertEqual(envDraft.resolvedAPIKey, "")
+        XCTAssertFalse(envDraft.canTestConnection)
+        envDraft.apiKey = "AIza-manual-secret"
+        XCTAssertEqual(envDraft.resolvedAPIKey, "AIza-manual-secret")
+        XCTAssertTrue(envDraft.canTestConnection)
+        XCTAssertEqual(store.readAPIKey(for: envDraft.provider.id), "AIza-manual-secret")
+
+        // 切离 Gemini 时重置 apiKeySource 为 manual，确保非 Gemini 协议绝不使用 GEMINI_API_KEY
+        envDraft.provider.apiKeySource = .environment
+        envDraft.setResponseFormat(.chatCompletions)
+        XCTAssertEqual(envDraft.provider.apiKeySource, .manual)
+        XCTAssertEqual(envDraft.provider.effectiveAPIKeySource, .manual)
+
+        // 空白非 Gemini 配置切到 Gemini 且无手动 Key 时，自动填入默认 Base URL 并启用环境变量
+        envDraft.addProvider()
+        envDraft.setResponseFormat(.gemini)
+        XCTAssertEqual(envDraft.baseURLText, AIResponseFormat.gemini.defaultBaseURL)
+        XCTAssertEqual(envDraft.provider.apiKeySource, .environment)
+
+        // 无环境变量时新增 Google AI Studio 保持手动输入模式
+        var noEnvDraft = AISettingsDraft(defaults: defaults, keyStore: store, environment: [:])
+        noEnvDraft.addGoogleAIStudioProvider()
+        XCTAssertEqual(noEnvDraft.provider.apiKeySource, .manual)
+        XCTAssertFalse(noEnvDraft.hasEnvironmentGeminiAPIKey)
+        XCTAssertFalse(noEnvDraft.canDiscover)
+        XCTAssertFalse(noEnvDraft.canTestConnection)
+        noEnvDraft.apiKey = "AIza-typed"
+        XCTAssertTrue(noEnvDraft.canDiscover)
+        XCTAssertTrue(noEnvDraft.canTestConnection)
+    }
+
+    func testLegacyProviderCollectionDecodesWithoutAPIKeySource() throws {
+        let suiteName = "LegacyProviderDecodeTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let id = UUID()
+        let legacy: [String: Any] = [
+            "activeID": id.uuidString,
+            "mode": "single",
+            "providers": [[
+                "id": id.uuidString,
+                "name": "Legacy",
+                "baseURL": "https://example.com/v1",
+                "responseFormat": "chatCompletions",
+                "apiKey": "",
+                "model": "gpt-4o-mini"
+            ]]
+        ]
+        defaults.set(try JSONSerialization.data(withJSONObject: legacy), forKey: AIProviderCollection.storageKey)
+        let loaded = AIProviderCollection.load(from: defaults)
+        XCTAssertEqual(loaded.providers.first?.apiKeySource, .manual)
+    }
 }

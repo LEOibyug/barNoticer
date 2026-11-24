@@ -1,13 +1,14 @@
 import Foundation
 
 enum AIResponseFormat: String, Codable, CaseIterable, Identifiable {
-    case chatCompletions, responses, anthropic
+    case chatCompletions, responses, anthropic, gemini
     var id: String { rawValue }
     var title: String {
         switch self {
         case .chatCompletions: "OpenAI Chat Completions"
         case .responses: "OpenAI Responses"
         case .anthropic: "Anthropic Messages"
+        case .gemini: "Google AI Studio (Gemini)"
         }
     }
     var endpoint: String {
@@ -15,6 +16,49 @@ enum AIResponseFormat: String, Codable, CaseIterable, Identifiable {
         case .chatCompletions: "chat/completions"
         case .responses: "responses"
         case .anthropic: "messages"
+        case .gemini: "models"
+        }
+    }
+    var defaultBaseURL: String {
+        switch self {
+        case .gemini: "https://generativelanguage.googleapis.com/v1beta"
+        case .anthropic: "https://api.anthropic.com/v1"
+        case .chatCompletions, .responses: "https://api.openai.com/v1"
+        }
+    }
+    var defaultModel: String {
+        switch self {
+        case .gemini: "gemini-2.5-flash"
+        case .anthropic: "claude-sonnet-4-20250514"
+        case .chatCompletions, .responses: "gpt-4o-mini"
+        }
+    }
+    var supportsReasoningEffort: Bool {
+        self == .chatCompletions || self == .responses
+    }
+}
+
+enum AIEnvironmentAPIKey {
+    static let geminiVariableName = "GEMINI_API_KEY"
+
+    nonisolated static func geminiAPIKey(in environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
+        (environment[geminiVariableName] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    nonisolated static func hasGeminiAPIKey(in environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        !geminiAPIKey(in: environment).isEmpty
+    }
+}
+
+enum AIAPIKeySource: String, Codable, CaseIterable, Identifiable {
+    case manual
+    case environment
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .manual: "手动输入"
+        case .environment: "环境变量（\(AIEnvironmentAPIKey.geminiVariableName)）"
         }
     }
 }
@@ -35,9 +79,14 @@ struct AIProviderConfiguration: Codable, Equatable, Identifiable {
     var name = "新供应商"
     var baseURL = ""
     var responseFormat: AIResponseFormat = .chatCompletions
+    var apiKeySource: AIAPIKeySource = .manual
     var apiKey = ""
     var model = ""
     var reasoningEffort: AIReasoningEffort? = nil
+
+    var effectiveAPIKeySource: AIAPIKeySource {
+        responseFormat == .gemini ? apiKeySource : .manual
+    }
 
     var url: URL? {
         guard let url = URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -46,13 +95,45 @@ struct AIProviderConfiguration: Codable, Equatable, Identifiable {
               url.query == nil, url.fragment == nil else { return nil }
         return url
     }
-    var canDiscover: Bool { url != nil && !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    var isReady: Bool { canDiscover && !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    func resolvedAPIKey(environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
+        switch effectiveAPIKeySource {
+        case .manual:
+            return apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .environment:
+            return AIEnvironmentAPIKey.geminiAPIKey(in: environment)
+        }
+    }
+
+    func canDiscover(environment: [String: String]) -> Bool {
+        url != nil && !resolvedAPIKey(environment: environment).isEmpty
+    }
+
+    func isReady(environment: [String: String]) -> Bool {
+        canDiscover(environment: environment) && !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var canDiscover: Bool { canDiscover(environment: ProcessInfo.processInfo.environment) }
+    var isReady: Bool { isReady(environment: ProcessInfo.processInfo.environment) }
 
     var settings: AISettings {
         AISettings(baseURL: url ?? URL(string: "invalid://configuration")!,
             model: model.trimmingCharacters(in: .whitespacesAndNewlines), responseFormat: responseFormat,
-            reasoningEffort: reasoningEffort)
+            reasoningEffort: reasoningEffort, apiKeySource: effectiveAPIKeySource)
+    }
+}
+
+extension AIProviderConfiguration {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "新供应商"
+        baseURL = try container.decodeIfPresent(String.self, forKey: .baseURL) ?? ""
+        responseFormat = try container.decodeIfPresent(AIResponseFormat.self, forKey: .responseFormat) ?? .chatCompletions
+        apiKeySource = try container.decodeIfPresent(AIAPIKeySource.self, forKey: .apiKeySource) ?? .manual
+        apiKey = try container.decodeIfPresent(String.self, forKey: .apiKey) ?? ""
+        model = try container.decodeIfPresent(String.self, forKey: .model) ?? ""
+        reasoningEffort = try container.decodeIfPresent(AIReasoningEffort.self, forKey: .reasoningEffort)
     }
 }
 

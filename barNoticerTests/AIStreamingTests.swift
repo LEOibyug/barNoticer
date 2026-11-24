@@ -187,6 +187,38 @@ final class AIStreamingTests: XCTestCase {
         XCTAssertEqual(result.toolCalls.map(\.function.arguments), ["{}", "{\"id\":bad"])
     }
 
+    func testGeminiStreamSeparatesThoughtsAndPreservesThoughtSignatureAndToolCalls() throws {
+        var decoder = AIProviderStreamDecoder(format: .gemini)
+        var events: [AIStreamEvent] = []
+        let chunk1: [String: Any] = ["candidates": [[
+            "content": ["role": "model", "parts": [["text": "先想🧠", "thought": true]]]
+        ]]]
+        let chunk2: [String: Any] = ["candidates": [[
+            "content": ["role": "model", "parts": [["text": "你好"]]]
+        ]]]
+        let chunk3: [String: Any] = ["candidates": [[
+            "content": ["role": "model", "parts": [
+                ["text": "🙂"],
+                ["thoughtSignature": "sig-stream-123", "functionCall": ["id": "fc-1", "name": "list_active_todos", "args": ["filter": "all"]]]
+            ]],
+            "finishReason": "STOP"
+        ]]]
+        events += try consume(chunk1, with: &decoder)
+        XCTAssertFalse(decoder.isComplete)
+        events += try consume(chunk2, with: &decoder)
+        XCTAssertFalse(decoder.isComplete)
+        events += try consume(chunk3, with: &decoder)
+        XCTAssertTrue(decoder.isComplete)
+        XCTAssertEqual(events, [.reasoning("先想🧠"), .text("你好"), .text("🙂"), .toolCall("list_active_todos")])
+        let result = try decoder.finish()
+        XCTAssertEqual(result.content, "你好🙂")
+        XCTAssertEqual(result.reasoningContent, "先想🧠")
+        XCTAssertEqual(result.toolCalls.map(\.id), ["fc-1"])
+        XCTAssertEqual(result.toolCalls.map(\.function.name), ["list_active_todos"])
+        let encodedParts = String(decoding: try JSONEncoder().encode(result.responseItems), as: UTF8.self)
+        XCTAssertTrue(encodedParts.contains("sig-stream-123"))
+    }
+
     func testRejectedTerminalAndMalformedEnvelopesNeverProduceFinalResults() throws {
         let cases: [(AIResponseFormat, [[String: Any]])] = [
             (.chatCompletions, [chat(["content": "partial"], finish: "length")]),
@@ -200,7 +232,12 @@ final class AIStreamingTests: XCTestCase {
             (.responses, [["type": "response.output_text.delta", "delta": NSNull()]]),
             (.anthropic, [anthropicStart, blockStart(["type": "text", "text": "partial"]), messageDelta("max_tokens")]),
             (.anthropic, [anthropicStart, blockStart(["type": "text", "text": "partial"]), messageDelta(), ["type": "message_stop"]]),
-            (.anthropic, [anthropicStart, blockStart(["type": "text", "text": "partial"]), blockStop(), ["type": "message_stop"]])
+            (.anthropic, [anthropicStart, blockStart(["type": "text", "text": "partial"]), blockStop(), ["type": "message_stop"]]),
+            (.gemini, [["candidates": [["content": ["parts": [["text": "partial"]]], "finishReason": "MAX_TOKENS"]]]]),
+            (.gemini, [["candidates": [["content": ["parts": [["text": "partial"]]], "finishReason": "SAFETY"]]]]),
+            (.gemini, [["promptFeedback": ["blockReason": "SAFETY"]]]),
+            (.gemini, [["candidates": NSNull()]]),
+            (.gemini, [["candidates": [["content": ["parts": [["functionCall": ["args": [String: Any]()]]]]]]]])
         ]
         for (format, payloads) in cases {
             var decoder = AIProviderStreamDecoder(format: format)
@@ -208,7 +245,7 @@ final class AIStreamingTests: XCTestCase {
             XCTAssertFalse(decoder.isComplete)
             XCTAssertThrowsError(try decoder.finish())
         }
-        for format in [AIResponseFormat.chatCompletions, .responses, .anthropic] {
+        for format in AIResponseFormat.allCases {
             var decoder = AIProviderStreamDecoder(format: format)
             XCTAssertThrowsError(try decoder.consume(data: "null", event: nil))
             XCTAssertThrowsError(try decoder.finish())
@@ -219,7 +256,8 @@ final class AIStreamingTests: XCTestCase {
         let cases: [(AIResponseFormat, [[String: Any]])] = [
             (.chatCompletions, [chat(["content": "partial"])]),
             (.responses, [responseText("partial"), responseItem(["type": "message", "content": [["type": "output_text", "text": "partial"]]])]),
-            (.anthropic, [anthropicStart, blockStart(["type": "text", "text": "partial"]), blockStop(), messageDelta()])
+            (.anthropic, [anthropicStart, blockStart(["type": "text", "text": "partial"]), blockStop(), messageDelta()]),
+            (.gemini, [["candidates": [["content": ["role": "model", "parts": [["text": "partial"]]]]]]])
         ]
         for (format, payloads) in cases {
             var decoder = AIProviderStreamDecoder(format: format)
@@ -230,12 +268,13 @@ final class AIStreamingTests: XCTestCase {
     }
 
     func testProviderFailuresRedactSecretsAndPoisonPartialResults() throws {
-        for format in [AIResponseFormat.chatCompletions, .responses, .anthropic] {
+        for format in AIResponseFormat.allCases {
             var decoder = AIProviderStreamDecoder(format: format, apiKey: "private-token")
-            let payload: [String: Any] = ["type": "error", "error": ["message": "bad private-token Bearer abc sk-secret-key"]]
+            let payload: [String: Any] = ["type": "error", "error": ["message": "bad private-token Bearer abc sk-secret-key AIzaSyDummySecret123"]]
             XCTAssertThrowsError(try consume(payload, with: &decoder)) { error in
                 XCTAssertFalse(error.localizedDescription.contains("private-token"))
                 XCTAssertFalse(error.localizedDescription.contains("sk-secret-key"))
+                XCTAssertFalse(error.localizedDescription.contains("AIzaSyDummySecret123"))
                 XCTAssertFalse(error.localizedDescription.contains("Bearer abc"))
             }
             XCTAssertFalse(decoder.isComplete)

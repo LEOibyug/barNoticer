@@ -3,10 +3,36 @@ import Foundation
 
 struct AIProviderDiagnostics {
     var session: URLSession = .shared
+    var environment: [String: String] = ProcessInfo.processInfo.environment
 
     func models(for provider: AIProviderConfiguration) async throws -> [String] {
-        guard let base = provider.url, provider.canDiscover else { throw AIClientError.invalidSettings }
+        guard let base = provider.url, provider.canDiscover(environment: environment) else { throw AIClientError.invalidSettings }
         var models: [String] = []
+        if provider.responseFormat == .gemini {
+            var pageToken: String?
+            for _ in 0..<10 {
+                var url = AIProviderTransport.endpoint(base: base, format: .gemini, path: "models")
+                var parts = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+                var items = [URLQueryItem(name: "pageSize", value: "100")]
+                if let pageToken { items.append(URLQueryItem(name: "pageToken", value: pageToken)) }
+                parts.queryItems = items
+                url = parts.url!
+                let root = try await get(url, provider: provider)
+                guard let entries = root["models"] as? [[String: Any]] else { throw AIClientError.invalidResponse }
+                for entry in entries {
+                    if let methods = entry["supportedGenerationMethods"] as? [String],
+                       !methods.contains("generateContent") {
+                        continue
+                    }
+                    guard var name = entry["name"] as? String, !name.isEmpty else { continue }
+                    if name.hasPrefix("models/") { name.removeFirst("models/".count) }
+                    models.append(name)
+                }
+                guard let next = root["nextPageToken"] as? String, !next.isEmpty, next != pageToken else { break }
+                pageToken = next
+            }
+            return Array(Set(models)).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        }
         var after: String?
         for _ in 0..<10 {
             var url = AIProviderTransport.endpoint(base: base, format: provider.responseFormat, path: "models")
@@ -32,7 +58,7 @@ struct AIProviderDiagnostics {
     }
 
     func balance(for provider: AIProviderConfiguration) async -> String? {
-        guard let base = provider.url, provider.canDiscover else { return nil }
+        guard provider.responseFormat != .gemini, let base = provider.url, provider.canDiscover(environment: environment) else { return nil }
         // There is no standard balance endpoint. Probe known compatible schemas only.
         var urls = ["user/balance", "dashboard/billing/credit_grants"].map {
             AIProviderTransport.endpoint(base: base, format: provider.responseFormat, path: $0)
@@ -69,23 +95,25 @@ struct AIProviderDiagnostics {
     private func get(_ url: URL, provider: AIProviderConfiguration) async throws -> [String: Any] {
         var request = URLRequest(url: url)
         request.timeoutInterval = 12
-        AIProviderTransport.authorize(&request, key: provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines), format: provider.responseFormat)
+        let apiKey = provider.resolvedAPIKey(environment: environment)
+        AIProviderTransport.authorize(&request, key: apiKey, format: provider.responseFormat)
         let (data, response) = try await session.data(for: request)
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw AIClientError.invalidResponse }
         guard 200..<300 ~= http.statusCode else {
-            throw AIClientError.requestFailed(http.statusCode, AIProviderTransport.failureMessage(data, apiKey: provider.apiKey))
+            throw AIClientError.requestFailed(http.statusCode, AIProviderTransport.failureMessage(data, apiKey: apiKey))
         }
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw AIClientError.invalidResponse }
         return root
     }
 
     func probe(_ provider: AIProviderConfiguration, imageURL: String, expectedCode: String) async -> AIProviderProbeResult {
-        let client = AIClient(session: session)
+        let client = AIClient(session: session, environment: environment)
+        let apiKey = provider.resolvedAPIKey(environment: environment)
         var result = AIProviderProbeResult()
         do {
             let response = try await client.send(messages: [.init(role: "user", content: "请只回复 OK。")],
-                settings: provider.settings, apiKey: provider.apiKey, tools: [], timeout: 20)
+                settings: provider.settings, apiKey: apiKey, tools: [], timeout: 20)
             result.text = response.content.isEmpty ? "未通过：没有文字响应" : "连接可用"
         } catch {
             result.text = "未通过：\(error.localizedDescription)"
@@ -94,7 +122,7 @@ struct AIProviderDiagnostics {
         guard !Task.isCancelled else { return result }
         do {
             let response = try await client.send(messages: [.init(role: "user", content: "读取图片中的四位数字，只回复数字。",
-                imageURLs: [imageURL])], settings: provider.settings, apiKey: provider.apiKey, tools: [], timeout: 25)
+                imageURLs: [imageURL])], settings: provider.settings, apiKey: apiKey, tools: [], timeout: 25)
             let digits = response.content.filter(\.isNumber)
             result.vision = digits == expectedCode ? "已验证，可识别图片" : "未通过：未正确识别测试图片"
         } catch {

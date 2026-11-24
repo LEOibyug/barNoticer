@@ -239,6 +239,7 @@ final class AIProviderTests: XCTestCase {
                     case .chatCompletions: return (200, ["choices": [["message": ["content": "ok"]]]])
                     case .responses: return (200, ["status": "completed", "output": [["type": "message", "content": [["type": "output_text", "text": "ok"]]]]])
                     case .anthropic: return (200, ["content": [["type": "text", "text": "ok"]], "stop_reason": "end_turn"])
+                    case .gemini: return (200, ["candidates": [["content": ["role": "model", "parts": [["text": "ok"]]], "finishReason": "STOP"]]])
                     }
                 }
                 _ = try await api.send(messages: [.init(role: "user", content: "hello")],
@@ -260,6 +261,10 @@ final class AIProviderTests: XCTestCase {
                 case .anthropic:
                     XCTAssertNil(json["reasoning"])
                     XCTAssertNil(json["reasoning_effort"])
+                case .gemini:
+                    XCTAssertNil(json["reasoning"])
+                    XCTAssertNil(json["reasoning_effort"])
+                    XCTAssertNil(json["generationConfig"])
                 }
             }
         }
@@ -291,7 +296,10 @@ final class AIProviderTests: XCTestCase {
             let p = provider("wire", format: format)
             let request = try AIProviderTransport.request(messages: messages, settings: p.settings, key: p.apiKey, tools: [AIToolSchema.readGlobalMemoryTool])
             let json = try body(request)
-            XCTAssertEqual(request.url?.path, "/v1/" + format.endpoint)
+            XCTAssertEqual(
+                request.url?.path,
+                format == .gemini ? "/v1/models/model-wire:generateContent" : "/v1/" + format.endpoint
+            )
             XCTAssertEqual((json["tools"] as? [[String: Any]])?.count, 1)
             switch format {
             case .chatCompletions:
@@ -311,6 +319,19 @@ final class AIProviderTests: XCTestCase {
                 let sent = try XCTUnwrap(json["messages"] as? [[String: Any]])
                 XCTAssertEqual((sent.last?["content"] as? [[String: Any]])?.first?["tool_use_id"] as? String, "call1")
                 XCTAssertEqual((sent[0]["content"] as? [[String: Any]])?.last?["type"] as? String, "image")
+            case .gemini:
+                XCTAssertEqual(request.value(forHTTPHeaderField: "x-goog-api-key"), p.apiKey)
+                XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+                let systemParts = try XCTUnwrap((json["systemInstruction"] as? [String: Any])?["parts"] as? [[String: Any]])
+                XCTAssertEqual(systemParts.first?["text"] as? String, "policy")
+                let contents = try XCTUnwrap(json["contents"] as? [[String: Any]])
+                let userParts = try XCTUnwrap(contents[0]["parts"] as? [[String: Any]])
+                XCTAssertEqual((userParts.first?["inlineData"] as? [String: Any])?["mimeType"] as? String, "image/png")
+                let toolResponseParts = try XCTUnwrap(contents.last?["parts"] as? [[String: Any]])
+                let fnResponse = try XCTUnwrap(toolResponseParts.first?["functionResponse"] as? [String: Any])
+                XCTAssertEqual(fnResponse["name"] as? String, "list_active_todos")
+                XCTAssertEqual(fnResponse["id"] as? String, "call1")
+                XCTAssertEqual((fnResponse["response"] as? [String: Any])?["result"] as? String, "result")
             }
         }
     }
@@ -423,6 +444,234 @@ final class AIProviderTests: XCTestCase {
         ProviderURLProtocol.handler = { _ in (200, ["choices": [["message": ["content": "OK"]]]]) }
         let noVision = await diagnostics.probe(provider("current"), imageURL: "data:image/png;base64,YQ==", expectedCode: "4321")
         XCTAssertTrue(noVision.vision.hasPrefix("未通过"))
+    }
+
+    func testGeminiEndpointNormalizationAndToolSchemaRules() throws {
+        let baseURLs = [
+            "https://generativelanguage.googleapis.com",
+            "https://generativelanguage.googleapis.com/v1beta",
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent"
+        ]
+        for rawBase in baseURLs {
+            let base = try XCTUnwrap(URL(string: rawBase))
+            let unary = AIProviderTransport.endpoint(base: base, format: .gemini, model: "models/gemini-2.5-flash", stream: false)
+            XCTAssertEqual(unary.absoluteString, "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent")
+            let stream = AIProviderTransport.endpoint(base: base, format: .gemini, model: "models/gemini-2.5-flash", stream: true)
+            XCTAssertEqual(stream.absoluteString, "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
+        }
+
+        let settings = AISettings(
+            baseURL: URL(string: "https://generativelanguage.googleapis.com/v1beta")!,
+            model: "gemini-2.5-flash",
+            responseFormat: .gemini
+        )
+        let request = try AIProviderTransport.request(
+            messages: [.init(role: "user", content: "列出事项")],
+            settings: settings,
+            key: "AIza-schema-test",
+            tools: AIToolSchema.openAICompatibleTools
+        )
+        let json = try body(request)
+        let tools = try XCTUnwrap(json["tools"] as? [[String: Any]])
+        let declarations = try XCTUnwrap(tools.first?["functionDeclarations"] as? [[String: Any]])
+        let readMemory = try XCTUnwrap(declarations.first { $0["name"] as? String == "read_global_memory" })
+        XCTAssertNil(readMemory["parameters"], "Parameterless Gemini functions must omit empty OBJECT parameters")
+        let createTodo = try XCTUnwrap(declarations.first { $0["name"] as? String == "create_todo" })
+        let params = try XCTUnwrap(createTodo["parameters"] as? [String: Any])
+        XCTAssertNotNil(params["properties"])
+    }
+
+    func testGeminiEnvironmentAPIKeyResolutionManualFallbackAndSecretRedaction() async throws {
+        let envSecret = "AIzaSyEnvSecretValue999"
+        let manualSecret = "AIzaSyManualSecretValue111"
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ProviderURLProtocol.self]
+
+        var envProvider = AIProviderConfiguration(
+            name: "Gemini Env",
+            baseURL: "https://generativelanguage.googleapis.com/v1beta",
+            responseFormat: .gemini,
+            apiKeySource: .environment,
+            apiKey: manualSecret,
+            model: "gemini-2.5-flash"
+        )
+        var settings = AISettings()
+        settings.providerRoutes = [envProvider]
+
+        ProviderURLProtocol.handler = { _ in
+            (200, ["candidates": [["content": ["role": "model", "parts": [["text": "env ok"]]], "finishReason": "STOP"]]])
+        }
+        let envClient = AIClient(
+            session: URLSession(configuration: config),
+            environment: [AIEnvironmentAPIKey.geminiVariableName: " \(envSecret) "]
+        )
+        let envResult = try await envClient.send(messages: [.init(role: "user", content: "hi")], settings: settings, apiKey: "", tools: [])
+        XCTAssertEqual(envResult.content, "env ok")
+        XCTAssertEqual(ProviderURLProtocol.requests.last?.value(forHTTPHeaderField: "x-goog-api-key"), envSecret)
+        XCTAssertNil(ProviderURLProtocol.requests.last?.url?.query)
+
+        // 手动输入模式优先使用手动 Key，即使环境变量也存在
+        envProvider.apiKeySource = .manual
+        settings.providerRoutes = [envProvider]
+        let manualResult = try await envClient.send(messages: [.init(role: "user", content: "hi")], settings: settings, apiKey: "", tools: [])
+        XCTAssertEqual(manualResult.content, "env ok")
+        XCTAssertEqual(ProviderURLProtocol.requests.last?.value(forHTTPHeaderField: "x-goog-api-key"), manualSecret)
+
+        // 缺少环境变量时报错且不发请求
+        ProviderURLProtocol.requests = []
+        envProvider.apiKeySource = .environment
+        settings.providerRoutes = [envProvider]
+        let missingClient = AIClient(session: URLSession(configuration: config), environment: [:])
+        do {
+            _ = try await missingClient.send(messages: [.init(role: "user", content: "hi")], settings: settings, apiKey: "", tools: [])
+            XCTFail("Expected missingEnvironmentAPIKey")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("GEMINI_API_KEY"))
+        }
+        XCTAssertTrue(ProviderURLProtocol.requests.isEmpty)
+
+        // HTTP 错误支持 JSON 数组包裹响应，且隐藏 AIza... 与当前 Key
+        ProviderURLProtocol.handler = { _ in
+            (400, ["error": ["message": "API key \(envSecret) invalid; also AIzaSyOtherLeak123", "status": "INVALID_ARGUMENT"]])
+        }
+        do {
+            _ = try await envClient.send(messages: [.init(role: "user", content: "hi")], settings: settings, apiKey: "", tools: [])
+            XCTFail("Expected error")
+        } catch {
+            let msg = error.localizedDescription
+            XCTAssertTrue(msg.contains("400"))
+            XCTAssertTrue(msg.contains("INVALID_ARGUMENT"))
+            XCTAssertFalse(msg.contains(envSecret))
+            XCTAssertFalse(msg.contains("AIzaSyOtherLeak123"))
+        }
+
+        let arrayErrorData = try JSONSerialization.data(withJSONObject: [["error": ["message": "bad AIzaSyArrayKey888", "status": "PERMISSION_DENIED"]]])
+        let arrayMessage = AIProviderTransport.failureMessage(arrayErrorData, apiKey: envSecret)
+        XCTAssertTrue(arrayMessage.contains("PERMISSION_DENIED"))
+        XCTAssertFalse(arrayMessage.contains("AIzaSyArrayKey888"))
+    }
+
+    func testGeminiThoughtPartsSignatureReplayAndCrossProviderFallback() async throws {
+        let first = provider("first", format: .gemini)
+        let second = provider("second", format: .gemini)
+        var settings = AISettings()
+        settings.providerRoutes = [first, second]
+
+        ProviderURLProtocol.handler = { _ in
+            (200, ["candidates": [[
+                "content": ["role": "model", "parts": [
+                    ["text": "内部思考", "thought": true],
+                    ["thoughtSignature": "opaque-thought-sig", "functionCall": ["name": "list_active_todos", "args": [:]]]
+                ]],
+                "finishReason": "STOP"
+            ]]])
+        }
+        let api = client()
+        let firstResult = try await api.send(messages: [.init(role: "user", content: "tasks")], settings: settings, apiKey: "")
+        XCTAssertEqual(firstResult.reasoningContent, "内部思考")
+        XCTAssertEqual(firstResult.toolCalls.first?.function.name, "list_active_todos")
+        XCTAssertEqual(firstResult.responseProviderID, first.id)
+
+        ProviderURLProtocol.handler = { request in
+            if request.url?.host == "first.example" { return (503, ["error": ["message": "down"]]) }
+            return (200, ["candidates": [["content": ["role": "model", "parts": [["text": "done"]]], "finishReason": "STOP"]]])
+        }
+        let toolCallID = try XCTUnwrap(firstResult.toolCalls.first?.id)
+        let followUp: [AIChatMessage] = [
+            .init(role: "user", content: "tasks"),
+            .init(
+                role: "assistant",
+                content: firstResult.content,
+                reasoningContent: firstResult.reasoningContent,
+                toolCalls: firstResult.toolCalls,
+                responseItems: firstResult.responseItems,
+                responseProviderID: firstResult.responseProviderID
+            ),
+            .init(role: "tool", content: "list", toolCallID: toolCallID)
+        ]
+        let nextResult = try await api.send(messages: followUp, settings: settings, apiKey: "")
+        XCTAssertEqual(nextResult.content, "done")
+
+        let sameProviderBody = String(decoding: try JSONSerialization.data(withJSONObject: body(ProviderURLProtocol.requests[1])), as: UTF8.self)
+        let fallbackProviderBody = String(decoding: try JSONSerialization.data(withJSONObject: body(ProviderURLProtocol.requests[2])), as: UTF8.self)
+        XCTAssertTrue(sameProviderBody.contains("opaque-thought-sig"))
+        XCTAssertFalse(fallbackProviderBody.contains("opaque-thought-sig"))
+        XCTAssertTrue(fallbackProviderBody.contains("functionResponse"))
+        XCTAssertTrue(fallbackProviderBody.contains("list_active_todos"))
+        // 原始 functionCall 未提供 id 时，不发送伪造 id
+        let fallbackJSON = try body(ProviderURLProtocol.requests[2])
+        let contents = try XCTUnwrap(fallbackJSON["contents"] as? [[String: Any]])
+        let toolPart = try XCTUnwrap((contents.last?["parts"] as? [[String: Any]])?.first?["functionResponse"] as? [String: Any])
+        XCTAssertNil(toolPart["id"])
+    }
+
+    func testGeminiDiscoveryAndBalanceBehavior() async throws {
+        var pageCount = 0
+        ProviderURLProtocol.handler = { request in
+            pageCount += 1
+            if pageCount == 1 {
+                return (200, [
+                    "models": [
+                        ["name": "models/gemini-2.5-flash", "supportedGenerationMethods": ["generateContent", "countTokens"]],
+                        ["name": "models/embedding-001", "supportedGenerationMethods": ["embedContent"]]
+                    ],
+                    "nextPageToken": "page-2"
+                ])
+            }
+            return (200, [
+                "models": [
+                    ["name": "models/gemini-2.5-pro", "supportedGenerationMethods": ["generateContent"]]
+                ]
+            ])
+        }
+        let diagnostics = AIProviderDiagnostics(
+            session: client().session,
+            environment: [AIEnvironmentAPIKey.geminiVariableName: "AIza-discover-env"]
+        )
+        let geminiProvider = AIProviderConfiguration(
+            name: "Gemini",
+            baseURL: "https://generativelanguage.googleapis.com/v1beta",
+            responseFormat: .gemini,
+            apiKeySource: .environment,
+            model: "gemini-2.5-flash"
+        )
+        let names = try await diagnostics.models(for: geminiProvider)
+        XCTAssertEqual(names, ["gemini-2.5-flash", "gemini-2.5-pro"])
+        XCTAssertEqual(ProviderURLProtocol.requests.count, 2)
+        XCTAssertTrue(ProviderURLProtocol.requests.allSatisfy { $0.value(forHTTPHeaderField: "x-goog-api-key") == "AIza-discover-env" })
+        XCTAssertTrue(ProviderURLProtocol.requests[1].url?.query?.contains("pageToken=page-2") == true)
+
+        ProviderURLProtocol.requests = []
+        let balance = await diagnostics.balance(for: geminiProvider)
+        XCTAssertNil(balance)
+        XCTAssertTrue(ProviderURLProtocol.requests.isEmpty)
+    }
+
+    func testGeminiProbeTextAndVision() async throws {
+        let diagnostics = AIProviderDiagnostics(
+            session: client().session,
+            environment: [AIEnvironmentAPIKey.geminiVariableName: "AIza-probe-env"]
+        )
+        ProviderURLProtocol.handler = { request in
+            let text = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
+            let isVision = text.contains("inlineData")
+            return (200, ["candidates": [["content": ["role": "model", "parts": [["text": isVision ? "8765" : "OK"]]], "finishReason": "STOP"]]])
+        }
+        let geminiProvider = AIProviderConfiguration(
+            name: "Gemini",
+            baseURL: "https://generativelanguage.googleapis.com/v1beta",
+            responseFormat: .gemini,
+            apiKeySource: .environment,
+            model: "gemini-2.5-flash"
+        )
+        let result = await diagnostics.probe(geminiProvider, imageURL: "data:image/png;base64,YQ==", expectedCode: "8765")
+        XCTAssertEqual(result.text, "连接可用")
+        XCTAssertEqual(result.vision, "已验证，可识别图片")
+        XCTAssertEqual(ProviderURLProtocol.requests.count, 2)
+        XCTAssertEqual(ProviderURLProtocol.requests[0].value(forHTTPHeaderField: "x-goog-api-key"), "AIza-probe-env")
+        XCTAssertEqual(ProviderURLProtocol.requests[0].url?.absoluteString, "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent")
     }
 }
 

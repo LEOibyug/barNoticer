@@ -106,7 +106,8 @@ final class AIStreamingClientTests: XCTestCase {
         let replies: [(AIResponseFormat, [String: Any])] = [
             (.chatCompletions, ["choices": [["message": ["content": "一次回复"]]]]),
             (.responses, ["status": "completed", "output": [["type": "message", "content": [["type": "output_text", "text": "一次回复"]]]]]),
-            (.anthropic, ["content": [["type": "text", "text": "一次回复"]], "stop_reason": "end_turn"])
+            (.anthropic, ["content": [["type": "text", "text": "一次回复"]], "stop_reason": "end_turn"]),
+            (.gemini, ["candidates": [["content": ["role": "model", "parts": [["text": "一次回复"]]], "finishReason": "STOP"]]])
         ]
         for (format, reply) in replies {
             var events: [AIStreamEvent] = []
@@ -122,6 +123,56 @@ final class AIStreamingClientTests: XCTestCase {
             XCTAssertEqual(events, [.reset, .text("一次回复")])
             XCTAssertEqual(requests, 1)
         }
+    }
+
+    func testGeminiSSEDeliversSplitUTF8AndUsesAltSSEAndHeaderAuth() async throws {
+        let firstText = expectation(description: "Partial Gemini text arrives")
+        let complete = expectation(description: "Gemini terminal STOP finishes")
+        var events: [AIStreamEvent] = []
+        var capturedRequest: URLRequest?
+
+        StreamingClientURLProtocol.start = { transport in
+            capturedRequest = transport.request
+            transport.headers(["Content-Type": "text/event-stream"])
+            let payload = Data("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"先想\",\"thought\":true},{\"text\":\"你\"}]}}]}\r\n\r\n".utf8)
+            let chinese = try! XCTUnwrap(payload.range(of: Data("你".utf8)))
+            transport.push(payload.prefix(chinese.lowerBound + 1))
+            transport.push(payload.dropFirst(chinese.lowerBound + 1))
+            StreamingClientURLProtocol.resume = {
+                transport.push("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"好\"}]},\"finishReason\":\"STOP\"}]}\n\n")
+            }
+            StreamingClientURLProtocol.close = { transport.finish() }
+        }
+
+        let settings = AISettings(
+            baseURL: URL(string: "https://generativelanguage.googleapis.com/v1beta")!,
+            model: "gemini-2.5-flash",
+            responseFormat: .gemini
+        )
+        let task = Task {
+            let result = try await client().sendStreaming(
+                messages: [.init(role: "user", content: "问候")],
+                settings: settings,
+                apiKey: "AIza-stream-test"
+            ) { event in
+                events.append(event)
+                if event == .text("你") { firstText.fulfill() }
+            }
+            complete.fulfill()
+            return result
+        }
+        defer { task.cancel() }
+        await fulfillment(of: [firstText], timeout: 3)
+        XCTAssertEqual(events, [.reset, .reasoning("先想"), .text("你")])
+        StreamingClientURLProtocol.resume?()
+        await fulfillment(of: [complete], timeout: 3)
+        StreamingClientURLProtocol.close?()
+        let result = try await task.value
+        XCTAssertEqual(result.content, "你好")
+        XCTAssertEqual(result.reasoningContent, "先想")
+        XCTAssertEqual(capturedRequest?.url?.absoluteString, "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
+        XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "x-goog-api-key"), "AIza-stream-test")
+        XCTAssertNil(capturedRequest?.value(forHTTPHeaderField: "Authorization"))
     }
 }
 

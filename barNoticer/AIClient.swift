@@ -2,6 +2,7 @@ import Foundation
 
 enum AIClientError: LocalizedError {
     case missingAPIKey
+    case missingEnvironmentAPIKey(String)
     case invalidSettings
     case invalidResponse
     case providerResponseFailed(String)
@@ -11,6 +12,8 @@ enum AIClientError: LocalizedError {
         switch self {
         case .missingAPIKey:
             return "请先在设置中填写 API Key"
+        case let .missingEnvironmentAPIKey(name):
+            return "未检测到环境变量 \(name)，请注入该环境变量或在设置中改为手动输入 API Key"
         case .invalidSettings:
             return "AI API 设置无效"
         case .invalidResponse:
@@ -125,6 +128,7 @@ struct AIChatResult: Equatable {
 
 struct AIClient {
     var session: URLSession = .shared
+    var environment: [String: String] = ProcessInfo.processInfo.environment
 
     func testConnection(
         settings: AISettings,
@@ -168,7 +172,8 @@ struct AIClient {
               tools: [AIToolDefinition], timeout: TimeInterval = 45,
               onEvent: (@MainActor (AIStreamEvent) -> Void)? = nil) async throws -> AIChatResult {
         let routes = settings.providerRoutes ?? [AIProviderConfiguration(name: "当前配置",
-            baseURL: settings.baseURL.absoluteString, responseFormat: settings.responseFormat, apiKey: apiKey,
+            baseURL: settings.baseURL.absoluteString, responseFormat: settings.responseFormat,
+            apiKeySource: settings.apiKeySource, apiKey: apiKey,
             model: settings.model, reasoningEffort: settings.reasoningEffort)]
         guard !routes.isEmpty else { throw AIClientError.invalidSettings }
         var lastError: Error = AIClientError.invalidSettings
@@ -177,24 +182,33 @@ struct AIClient {
             onEvent?(.reset)
             do {
                 let providerSettings = provider.settings
+                let resolvedKey = provider.resolvedAPIKey(environment: environment)
+                guard !resolvedKey.isEmpty else {
+                    throw provider.effectiveAPIKeySource == .environment
+                        ? AIClientError.missingEnvironmentAPIKey(AIEnvironmentAPIKey.geminiVariableName)
+                        : AIClientError.missingAPIKey
+                }
                 let providerID = settings.providerRoutes == nil
-                    ? (provider.responseFormat == .responses ? AIProviderTransport.responseProviderID(settings: providerSettings, key: provider.apiKey) : nil)
+                    ? ((provider.responseFormat == .responses || provider.responseFormat == .gemini)
+                        ? AIProviderTransport.responseProviderID(settings: providerSettings, key: resolvedKey)
+                        : nil)
                     : provider.id
                 var request = try AIProviderTransport.request(messages: messages, settings: providerSettings,
-                    key: provider.apiKey, tools: tools, providerID: providerID, stream: onEvent != nil)
+                    key: resolvedKey, tools: tools, providerID: providerID, stream: onEvent != nil,
+                    environment: environment)
                 request.timeoutInterval = timeout
                 var result: AIChatResult
                 if let onEvent {
                     result = try await stream(request: request, format: provider.responseFormat,
-                        apiKey: provider.apiKey, onEvent: onEvent)
+                        apiKey: resolvedKey, onEvent: onEvent)
                 } else {
                     let (data, response) = try await session.data(for: request)
                     try Task.checkCancellation()
                     guard let http = response as? HTTPURLResponse else { throw AIClientError.invalidResponse }
                     guard 200..<300 ~= http.statusCode else {
-                        throw AIClientError.requestFailed(http.statusCode, AIProviderTransport.failureMessage(data, apiKey: provider.apiKey))
+                        throw AIClientError.requestFailed(http.statusCode, AIProviderTransport.failureMessage(data, apiKey: resolvedKey))
                     }
-                    result = try AIProviderTransport.decode(data, format: provider.responseFormat, apiKey: provider.apiKey)
+                    result = try AIProviderTransport.decode(data, format: provider.responseFormat, apiKey: resolvedKey)
                 }
                 result.responseProviderID = providerID
                 return result

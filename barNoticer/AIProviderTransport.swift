@@ -3,32 +3,76 @@ import Foundation
 
 /// Wire adapters keep vendor payloads out of task execution and approval policy.
 enum AIProviderTransport {
-    static func endpoint(base: URL, format: AIResponseFormat, path: String? = nil) -> URL {
+    static func endpoint(base: URL, format: AIResponseFormat, model: String = "", path: String? = nil, stream: Bool = false) -> URL {
         var root = base
-        for suffix in ["chat/completions", "responses", "messages"] {
-            let path = root.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            if path == suffix || path.hasSuffix("/" + suffix) {
-                for _ in suffix.split(separator: "/") { root.deleteLastPathComponent() }
-                break
+        let trimmedPath = root.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let pathComponents = trimmedPath.split(separator: "/")
+        if pathComponents.count >= 2,
+           pathComponents[pathComponents.count - 2] == "models",
+           let last = pathComponents.last,
+           last.hasSuffix(":generateContent") || last.hasSuffix(":streamGenerateContent") {
+            root.deleteLastPathComponent()
+            root.deleteLastPathComponent()
+        } else {
+            for suffix in ["chat/completions", "responses", "messages", "models"] {
+                if trimmedPath == suffix || trimmedPath.hasSuffix("/" + suffix) {
+                    for _ in suffix.split(separator: "/") { root.deleteLastPathComponent() }
+                    break
+                }
             }
         }
-        return root.appendingPathComponent(path ?? format.endpoint)
+        if format == .gemini,
+           root.host?.lowercased() == "generativelanguage.googleapis.com",
+           root.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).isEmpty {
+            root = root.appendingPathComponent("v1beta")
+        }
+        if let path {
+            return root.appendingPathComponent(path)
+        }
+        if format == .gemini {
+            var normalizedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            if normalizedModel.hasPrefix("models/") {
+                normalizedModel.removeFirst("models/".count)
+            }
+            let action = stream ? "streamGenerateContent" : "generateContent"
+            var url = root
+                .appendingPathComponent("models")
+                .appendingPathComponent("\(normalizedModel):\(action)")
+            if stream, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+                var items = components.queryItems ?? []
+                items.append(URLQueryItem(name: "alt", value: "sse"))
+                components.queryItems = items
+                url = components.url ?? url
+            }
+            return url
+        }
+        return root.appendingPathComponent(format.endpoint)
     }
 
     static func request(messages: [AIChatMessage], settings: AISettings, key: String,
                         tools: [AIToolDefinition], maxTokens: Int? = nil, providerID: UUID? = nil,
-                        stream: Bool = false) throws -> URLRequest {
+                        stream: Bool = false, environment: [String: String] = ProcessInfo.processInfo.environment) throws -> URLRequest {
         guard settings.isValid else { throw AIClientError.invalidSettings }
-        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { throw AIClientError.missingAPIKey }
-        var request = URLRequest(url: endpoint(base: settings.baseURL, format: settings.responseFormat))
+        var resolvedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        if resolvedKey.isEmpty, settings.responseFormat == .gemini, settings.apiKeySource == .environment {
+            resolvedKey = AIEnvironmentAPIKey.geminiAPIKey(in: environment)
+        }
+        guard !resolvedKey.isEmpty else {
+            throw settings.responseFormat == .gemini && settings.apiKeySource == .environment
+                ? AIClientError.missingEnvironmentAPIKey(AIEnvironmentAPIKey.geminiVariableName)
+                : AIClientError.missingAPIKey
+        }
+        var request = URLRequest(url: endpoint(base: settings.baseURL, format: settings.responseFormat, model: settings.model, stream: stream))
         request.httpMethod = "POST"
         request.timeoutInterval = 45
-        authorize(&request, key: key, format: settings.responseFormat)
+        authorize(&request, key: resolvedKey, format: settings.responseFormat)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var body: [String: Any] = ["model": settings.model]
+        var body: [String: Any] = [:]
+        if settings.responseFormat != .gemini {
+            body["model"] = settings.model
+            if stream { body["stream"] = true }
+        }
         if stream {
-            body["stream"] = true
             request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         }
         switch settings.responseFormat {
@@ -40,7 +84,7 @@ enum AIProviderTransport {
         case .responses:
             body["store"] = false
             body["include"] = ["reasoning.encrypted_content"]
-            body["input"] = try responsesInput(messages, providerID: providerID ?? responseProviderID(settings: settings, key: key))
+            body["input"] = try responsesInput(messages, providerID: providerID ?? responseProviderID(settings: settings, key: resolvedKey))
             if let effort = settings.reasoningEffort {
                 var reasoning: [String: Any] = ["effort": effort.rawValue]
                 if effort != .none { reasoning["summary"] = "auto" }
@@ -64,17 +108,53 @@ enum AIProviderTransport {
                      "input_schema": try object(tool.function.parameters)] as [String: Any]
                 }
             }
+        case .gemini:
+            let systemText = messages.filter { $0.role == "system" }
+                .compactMap(\.content)
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
+            if !systemText.isEmpty {
+                body["systemInstruction"] = ["parts": [["text": systemText]]]
+            }
+            body["contents"] = try geminiContents(
+                messages,
+                providerID: providerID ?? responseProviderID(settings: settings, key: resolvedKey)
+            )
+            if !tools.isEmpty {
+                let declarations = try tools.map { tool -> [String: Any] in
+                    var declaration: [String: Any] = [
+                        "name": tool.function.name,
+                        "description": tool.function.description
+                    ]
+                    if var parameters = try object(tool.function.parameters) as? [String: Any],
+                       let properties = parameters["properties"] as? [String: Any],
+                       !properties.isEmpty {
+                        if let required = parameters["required"] as? [Any], required.isEmpty {
+                            parameters.removeValue(forKey: "required")
+                        }
+                        declaration["parameters"] = parameters
+                    }
+                    return declaration
+                }
+                body["tools"] = [["functionDeclarations": declarations]]
+            }
+            if let maxTokens {
+                body["generationConfig"] = ["maxOutputTokens": maxTokens]
+            }
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
     }
 
     static func authorize(_ request: inout URLRequest, key: String, format: AIResponseFormat) {
-        if format == .anthropic {
+        switch format {
+        case .chatCompletions, .responses:
+            request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        case .anthropic:
             request.setValue(key, forHTTPHeaderField: "x-api-key")
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        } else {
-            request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        case .gemini:
+            request.setValue(key, forHTTPHeaderField: "x-goog-api-key")
         }
     }
 
@@ -156,6 +236,63 @@ enum AIProviderTransport {
             }
             guard !texts.isEmpty || !calls.isEmpty else { throw AIClientError.invalidResponse }
             return AIChatResult(content: texts.joined(separator: "\n"), toolCalls: calls)
+        case .gemini:
+            guard let candidates = root["candidates"] as? [[String: Any]], let candidate = candidates.first else {
+                if let blockReason = (root["promptFeedback"] as? [String: Any])?["blockReason"] as? String,
+                   !blockReason.isEmpty {
+                    throw AIClientError.providerResponseFailed("请求被安全策略拦截（\(safeDiagnostic(blockReason, apiKey: apiKey))）")
+                }
+                throw AIClientError.invalidResponse
+            }
+            if let finishReason = candidate["finishReason"] as? String,
+               !finishReason.isEmpty,
+               finishReason != "STOP",
+               finishReason != "FINISH_REASON_UNSPECIFIED" {
+                if finishReason == "MAX_TOKENS" {
+                    throw AIClientError.providerResponseFailed("达到输出长度限制，请提高输出上限或缩短请求后重试")
+                }
+                throw AIClientError.providerResponseFailed("输出被供应商中止（\(safeDiagnostic(finishReason, apiKey: apiKey))）")
+            }
+            guard let content = candidate["content"] as? [String: Any],
+                  let parts = content["parts"] as? [[String: Any]] else {
+                throw AIClientError.invalidResponse
+            }
+            var texts: [String] = []
+            var thoughts: [String] = []
+            var calls: [AIToolCall] = []
+            var hasReasoning = false
+            for part in parts {
+                if part["thought"] as? Bool == true {
+                    hasReasoning = true
+                    if let text = part["text"] as? String, !text.isEmpty {
+                        thoughts.append(text)
+                    }
+                } else if let text = part["text"] as? String {
+                    texts.append(text)
+                }
+                if let functionCall = part["functionCall"] as? [String: Any] {
+                    guard let name = functionCall["name"] as? String, !name.isEmpty else {
+                        throw AIClientError.invalidResponse
+                    }
+                    let explicitID = (functionCall["id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                    let callID = explicitID ?? "gemini-call-\(calls.count)"
+                    let args: String
+                    if functionCall["args"] == nil || functionCall["args"] is NSNull {
+                        args = "{}"
+                    } else {
+                        args = try toolArguments(functionCall["args"])
+                    }
+                    calls.append(.init(id: callID, type: "function", function: .init(name: name, arguments: args)))
+                }
+            }
+            guard !texts.isEmpty || !calls.isEmpty || hasReasoning else { throw AIClientError.invalidResponse }
+            let items = try JSONDecoder().decode([JSONValue].self, from: JSONSerialization.data(withJSONObject: parts))
+            return AIChatResult(
+                content: texts.joined(),
+                reasoningContent: thoughts.isEmpty ? nil : thoughts.joined(),
+                toolCalls: calls,
+                responseItems: items
+            )
         }
     }
 
@@ -231,13 +368,89 @@ enum AIProviderTransport {
         return result
     }
 
+    private static func geminiContents(_ messages: [AIChatMessage], providerID: UUID?) throws -> [[String: Any]] {
+        var result: [[String: Any]] = []
+        var toolCallMetadata: [String: (name: String, includeID: Bool)] = [:]
+
+        for message in messages where message.role != "system" {
+            let role = message.role == "assistant" ? "model" : "user"
+            var parts: [[String: Any]] = []
+
+            if message.role == "assistant", message.responseProviderID == providerID, let items = message.responseItems {
+                let rawParts = try object(items) as? [[String: Any]] ?? []
+                parts += rawParts
+                var callIndex = 0
+                for rawPart in rawParts {
+                    guard let functionCall = rawPart["functionCall"] as? [String: Any],
+                          let name = functionCall["name"] as? String else { continue }
+                    let explicitID = (functionCall["id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                    let callID = explicitID ?? (callIndex < (message.toolCalls?.count ?? 0) ? message.toolCalls?[callIndex].id : nil)
+                    if let callID {
+                        toolCallMetadata[callID] = (name: name, includeID: explicitID != nil)
+                    }
+                    callIndex += 1
+                }
+            } else if message.role == "tool" {
+                let callID = message.toolCallID ?? ""
+                let metadata = toolCallMetadata[callID]
+                var functionResponse: [String: Any] = [
+                    "name": metadata?.name ?? (callID.isEmpty ? "tool" : callID),
+                    "response": ["result": message.content ?? ""]
+                ]
+                if metadata?.includeID == true, !callID.isEmpty {
+                    functionResponse["id"] = callID
+                }
+                parts.append(["functionResponse": functionResponse])
+            } else {
+                if let text = message.content, !text.isEmpty {
+                    parts.append(["text": text])
+                }
+                for url in message.imageURLs {
+                    if url.hasPrefix("data:"), let comma = url.firstIndex(of: ",") {
+                        let header = url.dropFirst(5)[..<comma]
+                        let mime = header.prefix { $0 != ";" }
+                        parts.append([
+                            "inlineData": [
+                                "mimeType": String(mime),
+                                "data": String(url[url.index(after: comma)...])
+                            ]
+                        ])
+                    } else {
+                        parts.append(["fileData": ["fileUri": url]])
+                    }
+                }
+                for call in message.toolCalls ?? [] {
+                    let parsedArgs = (try? JSONSerialization.jsonObject(with: Data(call.function.arguments.utf8))) as? [String: Any] ?? [:]
+                    var functionCall: [String: Any] = ["name": call.function.name, "args": parsedArgs]
+                    let includeID = !call.id.isEmpty && !call.id.hasPrefix("gemini-call-")
+                    if includeID {
+                        functionCall["id"] = call.id
+                    }
+                    toolCallMetadata[call.id] = (name: call.function.name, includeID: includeID)
+                    parts.append(["functionCall": functionCall])
+                }
+            }
+
+            if parts.isEmpty { continue }
+            if result.last?["role"] as? String == role {
+                var last = result.removeLast()
+                last["parts"] = (last["parts"] as? [[String: Any]] ?? []) + parts
+                result.append(last)
+            } else {
+                result.append(["role": role, "parts": parts])
+            }
+        }
+        return result
+    }
+
     static func failureMessage(_ data: Data, apiKey: String = "") -> String {
-        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+        let parsed = try? JSONSerialization.jsonObject(with: data)
+        guard let root = (parsed as? [String: Any]) ?? (parsed as? [[String: Any]])?.first else {
             return "供应商未能完成请求，请检查模型、协议、推理设置和 API Key"
         }
         let error = root["error"] as? [String: Any]
         let message = error?["message"] as? String ?? root["message"] as? String ?? root["error"] as? String
-        let details = [message, error?["code"] as? String, error?["param"] as? String].compactMap { $0 }
+        let details = [message, error?["status"] as? String, error?["code"] as? String, error?["param"] as? String].compactMap { $0 }
         guard !details.isEmpty else { return "供应商未能完成请求，请检查模型、协议、推理设置和 API Key" }
         return safeDiagnostic(details.joined(separator: " · "), apiKey: apiKey)
     }
@@ -246,7 +459,7 @@ enum AIProviderTransport {
         var text = text
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if !key.isEmpty { text = text.replacingOccurrences(of: key, with: "[已隐藏]") }
-        text = text.replacingOccurrences(of: #"(?i)\bBearer\s+\S+|\bsk-[A-Za-z0-9_-]+"#, with: "[已隐藏]", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"(?i)\bBearer\s+\S+|\bsk-[A-Za-z0-9_-]+|\bAIza[A-Za-z0-9_-]+"#, with: "[已隐藏]", options: .regularExpression)
         text = text.components(separatedBy: .controlCharacters).joined(separator: " ")
         return String(text.prefix(500))
     }

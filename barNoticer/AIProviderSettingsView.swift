@@ -16,13 +16,20 @@ struct AIProviderSettingsView: View {
     private struct DiscoveryID: Equatable {
         let id: UUID
         let url: String
+        let keySource: AIAPIKeySource
         let key: String
         let format: AIResponseFormat
         let refresh: Int
     }
     private var discoveryID: DiscoveryID {
-        DiscoveryID(id: draft.provider.id, url: draft.baseURLText, key: draft.apiKey,
-            format: draft.provider.responseFormat, refresh: refreshID)
+        DiscoveryID(
+            id: draft.provider.id,
+            url: draft.baseURLText,
+            keySource: draft.provider.effectiveAPIKeySource,
+            key: draft.resolvedAPIKey,
+            format: draft.provider.responseFormat,
+            refresh: refreshID
+        )
     }
     private var candidates: [String] { AIProviderDiagnostics.candidates(in: models, prefix: draft.model) }
 
@@ -47,7 +54,15 @@ struct AIProviderSettingsView: View {
                             Text("\(index + 1). \(displayName(provider))").tag(provider.id)
                         }
                     }.labelsHidden()
-                    Button { draft.addProvider() } label: { Image(systemName: "plus") }.help("新增供应商")
+                    Menu {
+                        Button("新增自定义供应商") { draft.addProvider() }
+                        Button("新增 Google AI Studio (Gemini)") { draft.addGoogleAIStudioProvider() }
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("新增供应商")
                     Button { draft.removeProvider() } label: { Image(systemName: "minus") }
                         .disabled(draft.collection.providers.count < 2).help("删除当前配置")
                 }
@@ -68,21 +83,50 @@ struct AIProviderSettingsView: View {
                     .labelsHidden().textFieldStyle(.roundedBorder)
             }
             field("Base URL") {
-                TextField("Base URL", text: $draft.baseURLText, prompt: Text("https://api.openai.com/v1").foregroundStyle(.tertiary))
+                TextField("Base URL", text: $draft.baseURLText, prompt: Text(draft.provider.responseFormat.defaultBaseURL).foregroundStyle(.tertiary))
                     .labelsHidden().textFieldStyle(.roundedBorder)
             }
             field("响应格式") {
-                Picker("响应格式", selection: providerBinding(\.responseFormat)) {
+                Picker("响应格式", selection: Binding(
+                    get: { draft.provider.responseFormat },
+                    set: { draft.setResponseFormat($0) }
+                )) {
                     ForEach(AIResponseFormat.allCases) { Text($0.title).tag($0) }
                 }.labelsHidden()
             }
             field("API Key") {
-                SecureField("API Key", text: $draft.apiKey, prompt: Text("sk-…").foregroundStyle(.tertiary))
-                    .labelsHidden().textFieldStyle(.roundedBorder)
+                VStack(alignment: .leading, spacing: 6) {
+                    if draft.provider.responseFormat == .gemini {
+                        Picker("Key 来源", selection: providerBinding(\.apiKeySource)) {
+                            ForEach(AIAPIKeySource.allCases) { Text($0.title).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+                    if draft.provider.effectiveAPIKeySource == .environment {
+                        if draft.hasEnvironmentGeminiAPIKey {
+                            Text("已从环境变量 \(AIEnvironmentAPIKey.geminiVariableName) 读取，不会写入本机配置文件。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("未检测到环境变量 \(AIEnvironmentAPIKey.geminiVariableName)。启动应用前注入该变量，或切换为手动输入。")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                    } else {
+                        SecureField(
+                            "API Key",
+                            text: $draft.apiKey,
+                            prompt: Text(draft.provider.responseFormat == .gemini ? "AIza…" : "sk-…").foregroundStyle(.tertiary)
+                        )
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                    }
+                }
             }
             field("模型") {
                 VStack(alignment: .leading, spacing: 6) {
-                    TextField("模型", text: $draft.model, prompt: Text("例如：gpt-4o-mini").foregroundStyle(.tertiary))
+                    TextField("模型", text: $draft.model, prompt: Text("例如：\(draft.provider.responseFormat.defaultModel)").foregroundStyle(.tertiary))
                         .labelsHidden().textFieldStyle(.roundedBorder).focused($modelFocused)
                     if modelFocused, !candidates.isEmpty {
                         VStack(alignment: .leading, spacing: 0) {
@@ -99,7 +143,7 @@ struct AIProviderSettingsView: View {
                     }
                 }
             }
-            if draft.provider.responseFormat != .anthropic {
+            if draft.provider.responseFormat.supportsReasoningEffort {
                 field("推理强度") {
                     VStack(alignment: .leading, spacing: 6) {
                         Picker("推理强度", selection: providerBinding(\.reasoningEffort)) {
@@ -123,7 +167,7 @@ struct AIProviderSettingsView: View {
                     Text(discoveryStatus.isEmpty ? "填写 URL 和 Key 后自动获取，也可手动输入模型名" : discoveryStatus)
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Button("刷新") { refreshID += 1 }.disabled(!draft.provider.canDiscover)
+                    Button("刷新") { refreshID += 1 }.disabled(!draft.canDiscover)
                 }
             }
             field("余额") {
@@ -166,12 +210,13 @@ struct AIProviderSettingsView: View {
     private func discover() async {
         let identity = discoveryID
         let provider = draft.provider
+        let environment = draft.environment
         models = []; balance = nil; discoveryStatus = ""; isDiscovering = false
-        guard provider.canDiscover else { return }
+        guard provider.canDiscover(environment: environment) else { return }
         do { try await Task.sleep(for: .milliseconds(650)) } catch { return }
         guard !Task.isCancelled, identity == discoveryID else { return }
         isDiscovering = true
-        let diagnostics = AIProviderDiagnostics()
+        let diagnostics = AIProviderDiagnostics(environment: environment)
         async let balanceResult = diagnostics.balance(for: provider)
         do {
             let fetched = try await diagnostics.models(for: provider)
@@ -190,11 +235,12 @@ struct AIProviderSettingsView: View {
 
     private func testCurrent() {
         let provider = draft.provider
+        let environment = draft.environment
         let challenge = AIProviderDiagnostics.visionChallenge()
         isTesting = true
         probe = AIProviderProbeResult(text: "测试中…", vision: "等待文字测试")
         probeTask = Task { @MainActor in
-            let result = await AIProviderDiagnostics().probe(provider, imageURL: challenge.url, expectedCode: challenge.code)
+            let result = await AIProviderDiagnostics(environment: environment).probe(provider, imageURL: challenge.url, expectedCode: challenge.code)
             guard !Task.isCancelled, provider == draft.provider else { return }
             probe = result
             isTesting = false
